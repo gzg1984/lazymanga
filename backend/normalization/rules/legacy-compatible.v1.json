@@ -1,0 +1,63 @@
+{
+  "name": "legacy-compatible",
+  "version": "v1",
+  "rules": [
+    {
+      "id": "entertainment-explicit",
+      "priority": 10,
+      "enabled": true,
+      "match": {
+        "is_entertainment": true
+      },
+      "action": {
+        "target_dir": "Entertainment",
+        "rule_type": "Entertainment",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-windows",
+      "priority": 20,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["windows", "win10", "win11"]
+      },
+      "action": {
+        "target_dir": "OS/Windows",
+        "rule_type": "Windows",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-fallback",
+      "priority": 30,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false
+      },
+      "action": {
+        "target_dir": "OS",
+        "rule_type": "OS",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-infer-windows",
+      "priority": 40,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["windows", "win10", "win11"]
+      },
+      "action": {
+        "target_dir": "OS/Windows",
+        "rule_type": "Windows",
+        "infer_is_os": true
+      }
+    }
+  ]
+}

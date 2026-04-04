@@ -1,0 +1,573 @@
+{
+  "name": "default-os-relocation",
+  "version": "v1",
+  "rules": [
+    {
+      "id": "entertainment-explicit",
+      "priority": 10,
+      "enabled": true,
+      "match": {
+        "is_entertainment": true
+      },
+      "action": {
+        "target_dir": "Entertainment",
+        "rule_type": "Entertainment",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-ubuntu",
+      "priority": 20,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["ubuntu", "kubuntu", "xubuntu", "lubuntu"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Ubuntu",
+        "rule_type": "Ubuntu",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-debian",
+      "priority": 30,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["debian"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Debian",
+        "rule_type": "Debian",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-fedora",
+      "priority": 40,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["fedora"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Fedora",
+        "rule_type": "Fedora",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-centos",
+      "priority": 50,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["centos"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/CentOS",
+        "rule_type": "CentOS",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-rhel",
+      "priority": 60,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["rhel", "redhat", "red-hat"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/RHEL",
+        "rule_type": "RHEL",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-rocky-linux",
+      "priority": 70,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["rocky"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Rocky",
+        "rule_type": "Rocky Linux",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-almalinux",
+      "priority": 80,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["almalinux", "alma"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/AlmaLinux",
+        "rule_type": "AlmaLinux",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-sle",
+      "priority": 90,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["sles", "sle"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/SUSELinuxEnterprise",
+        "rule_type": "SLE",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-opensuse",
+      "priority": 100,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["opensuse", "open-suse", "suse"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/OpenSUSE",
+        "rule_type": "OpenSUSE",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-arch-linux",
+      "priority": 110,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["archlinux", "arch"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Arch",
+        "rule_type": "Arch Linux",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-manjaro",
+      "priority": 120,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["manjaro"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Manjaro",
+        "rule_type": "Manjaro",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-kali-linux",
+      "priority": 130,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["kali"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Kali",
+        "rule_type": "Kali Linux",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-linux-mint",
+      "priority": 140,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["linuxmint", "mint"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Mint",
+        "rule_type": "Linux Mint",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-windows-11",
+      "priority": 150,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["windows11", "windows-11", "win11"]
+      },
+      "action": {
+        "target_dir": "OS/Windows/Windows11",
+        "rule_type": "Windows 11",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-windows-10",
+      "priority": 160,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["windows10", "windows-10", "win10"]
+      },
+      "action": {
+        "target_dir": "OS/Windows/Windows10",
+        "rule_type": "Windows 10",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-windows",
+      "priority": 170,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["windows"]
+      },
+      "action": {
+        "target_dir": "OS/Windows",
+        "rule_type": "Windows",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-macos",
+      "priority": 180,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["macos", "osx", "ventura", "sonoma", "sequoia"]
+      },
+      "action": {
+        "target_dir": "OS/macOS",
+        "rule_type": "macOS",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-vmware-esxi",
+      "priority": 190,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false,
+        "file_name_contains": ["esxi", "vmvisor"]
+      },
+      "action": {
+        "target_dir": "OS/VMware/ESXi",
+        "rule_type": "VMware ESXi",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-explicit-fallback",
+      "priority": 200,
+      "enabled": true,
+      "match": {
+        "is_os": true,
+        "is_entertainment": false
+      },
+      "action": {
+        "target_dir": "OS",
+        "rule_type": "OS",
+        "infer_is_os": false
+      }
+    },
+    {
+      "id": "os-infer-ubuntu",
+      "priority": 210,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["ubuntu", "kubuntu", "xubuntu", "lubuntu"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Ubuntu",
+        "rule_type": "Ubuntu",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-debian",
+      "priority": 220,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["debian"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Debian",
+        "rule_type": "Debian",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-fedora",
+      "priority": 230,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["fedora"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Fedora",
+        "rule_type": "Fedora",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-centos",
+      "priority": 240,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["centos"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/CentOS",
+        "rule_type": "CentOS",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-rhel",
+      "priority": 250,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["rhel", "redhat", "red-hat"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/RHEL",
+        "rule_type": "RHEL",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-rocky-linux",
+      "priority": 260,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["rocky"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Rocky",
+        "rule_type": "Rocky Linux",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-almalinux",
+      "priority": 270,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["almalinux", "alma"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/AlmaLinux",
+        "rule_type": "AlmaLinux",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-sle",
+      "priority": 280,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["sles", "sle"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/SUSELinuxEnterprise",
+        "rule_type": "SLE",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-opensuse",
+      "priority": 290,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["opensuse", "open-suse", "suse"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/OpenSUSE",
+        "rule_type": "OpenSUSE",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-arch-linux",
+      "priority": 300,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["archlinux", "arch"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Arch",
+        "rule_type": "Arch Linux",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-manjaro",
+      "priority": 310,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["manjaro"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Manjaro",
+        "rule_type": "Manjaro",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-kali-linux",
+      "priority": 320,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["kali"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Kali",
+        "rule_type": "Kali Linux",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-linux-mint",
+      "priority": 330,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["linuxmint", "mint"]
+      },
+      "action": {
+        "target_dir": "OS/Linux/Mint",
+        "rule_type": "Linux Mint",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-windows-11",
+      "priority": 340,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["windows11", "windows-11", "win11"]
+      },
+      "action": {
+        "target_dir": "OS/Windows/Windows11",
+        "rule_type": "Windows 11",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-windows-10",
+      "priority": 350,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["windows10", "windows-10", "win10"]
+      },
+      "action": {
+        "target_dir": "OS/Windows/Windows10",
+        "rule_type": "Windows 10",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-windows",
+      "priority": 360,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["windows"]
+      },
+      "action": {
+        "target_dir": "OS/Windows",
+        "rule_type": "Windows",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-macos",
+      "priority": 370,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["macos", "osx", "ventura", "sonoma", "sequoia"]
+      },
+      "action": {
+        "target_dir": "OS/macOS",
+        "rule_type": "macOS",
+        "infer_is_os": true
+      }
+    },
+    {
+      "id": "os-infer-vmware-esxi",
+      "priority": 380,
+      "enabled": true,
+      "match": {
+        "is_os": false,
+        "is_entertainment": false,
+        "file_name_contains": ["esxi", "vmvisor"]
+      },
+      "action": {
+        "target_dir": "OS/VMware/ESXi",
+        "rule_type": "VMware ESXi",
+        "infer_is_os": true
+      }
+    }
+  ]
+}
