@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"lazyiso/models"
+	"lazymanga/models"
 	"log"
 	"strings"
 
@@ -14,21 +14,18 @@ import (
 
 const (
 	repoInfoSingletonID      uint   = 1
-	repoInfoSchemaVersion    int    = 3
+	repoInfoSchemaVersion    int    = 5
 	defaultRepoInfoFlagsJSON string = "{}"
 	repoTypeNone             string = "none"
 	repoTypeOS               string = "os"
 )
 
 func normalizeCreateRepoType(repoType string) (string, error) {
-	v := strings.ToLower(strings.TrimSpace(repoType))
-	if v == "" {
-		return repoTypeOS, nil
+	key, _, err := resolveRepoTypeForCreate(repoType)
+	if err != nil {
+		return "", err
 	}
-	if v != repoTypeNone && v != repoTypeOS {
-		return "", fmt.Errorf("must be one of: none, os")
-	}
-	return v, nil
+	return key, nil
 }
 
 func applyRepoInfoPresetByType(repo models.Repository, repoType string) error {
@@ -42,78 +39,25 @@ func applyRepoInfoPresetByType(repo models.Repository, repoType string) error {
 		return fmt.Errorf("ensure repo_info failed for db=%s: %w", dbPath, err)
 	}
 
-	t, err := normalizeCreateRepoType(repoType)
+	key, def, err := resolveRepoTypeForCreate(repoType)
 	if err != nil {
 		return err
 	}
 
-	changed := false
-	if t == repoTypeNone {
-		if info.AddButton != true {
-			info.AddButton = true
-			changed = true
-		}
-		if info.DeleteButton != true {
-			info.DeleteButton = true
-			changed = true
-		}
-		if info.AutoNormalize != false {
-			info.AutoNormalize = false
-			changed = true
-		}
-		if info.ShowMD5 != true {
-			info.ShowMD5 = true
-			changed = true
-		}
-		if info.ShowSize != true {
-			info.ShowSize = true
-			changed = true
-		}
-		if info.SingleMove != true {
-			info.SingleMove = true
-			changed = true
-		}
-		if setRepoRulebookBindingOnInfo(&info, "noop", "v1") {
-			changed = true
-		}
+	effective := applyRepoSettingsOverride(repoTypeDefToSettings(def), repoTypeSettingsOverride{})
+	changed, err := applyEffectiveSettingsToRepoInfo(&info, key, repoTypeSettingsOverride{}, effective)
+	if err != nil {
+		return fmt.Errorf("apply repo type settings failed for db=%s: %w", dbPath, err)
 	}
-
-	if t == repoTypeOS {
-		if info.AddButton != false {
-			info.AddButton = false
-			changed = true
-		}
-		if info.DeleteButton != false {
-			info.DeleteButton = false
-			changed = true
-		}
-		if info.AutoNormalize != true {
-			info.AutoNormalize = true
-			changed = true
-		}
-		if info.ShowMD5 != false {
-			info.ShowMD5 = false
-			changed = true
-		}
-		if info.ShowSize != false {
-			info.ShowSize = false
-			changed = true
-		}
-		if info.SingleMove != false {
-			info.SingleMove = false
-			changed = true
-		}
-		if setRepoRulebookBindingOnInfo(&info, "default-os-relocation", "v1") {
-			changed = true
-		}
-	}
-
 	if !changed {
 		return nil
 	}
 
 	if err := repoDB.Save(&info).Error; err != nil {
 		return fmt.Errorf("save repo_info preset failed for db=%s: %w", dbPath, err)
+	}
+	if err := updateRepositoryRepoTypeKey(repo.ID, key); err != nil {
+		return fmt.Errorf("sync repository repo_type_key failed: %w", err)
 	}
 	return nil
 }
@@ -263,7 +207,7 @@ func EnsureRepoInfoFromRepository(repoDB *gorm.DB, repo models.Repository) (mode
 		changed = true
 	}
 	if info.SchemaVersion <= 0 {
-		info.SchemaVersion = repoInfoSchemaVersion
+		info.SchemaVersion = 1
 		changed = true
 	}
 
@@ -289,6 +233,24 @@ func EnsureRepoInfoFromRepository(repoDB *gorm.DB, repo models.Repository) (mode
 			info.SingleMove = true
 			changed = true
 		}
+		info.SchemaVersion = 3
+		changed = true
+	}
+
+	if info.SchemaVersion < 4 {
+		if strings.TrimSpace(info.RepoTypeKey) == "" {
+			info.RepoTypeKey = inferRepoTypeKeyFromInfo(info, repo)
+			changed = true
+		}
+		if strings.TrimSpace(info.SettingsOverrideJSON) == "" {
+			info.SettingsOverrideJSON = defaultRepoSettingsOverrideJSON
+			changed = true
+		}
+		info.SchemaVersion = 4
+		changed = true
+	}
+
+	if info.SchemaVersion < 5 {
 		info.SchemaVersion = repoInfoSchemaVersion
 		changed = true
 	}
@@ -297,15 +259,25 @@ func EnsureRepoInfoFromRepository(repoDB *gorm.DB, repo models.Repository) (mode
 		info.FlagsJSON = defaultRepoInfoFlagsJSON
 		changed = true
 	}
-	desiredAddButton := repo.Basic
-	if info.AddButton != desiredAddButton {
-		info.AddButton = desiredAddButton
+	if strings.TrimSpace(info.RepoTypeKey) == "" {
+		info.RepoTypeKey = inferRepoTypeKeyFromInfo(info, repo)
 		changed = true
 	}
-	desiredDeleteButton := repo.Basic
-	if info.DeleteButton != desiredDeleteButton {
-		info.DeleteButton = desiredDeleteButton
+	if strings.TrimSpace(info.SettingsOverrideJSON) == "" {
+		info.SettingsOverrideJSON = defaultRepoSettingsOverrideJSON
 		changed = true
+	}
+
+	if repoTypeKey, _, override, effective, _, resolveErr := resolveEffectiveRepoTypeSettings(info, repo); resolveErr == nil {
+		applied, applyErr := applyEffectiveSettingsToRepoInfo(&info, repoTypeKey, override, effective)
+		if applyErr != nil {
+			return models.RepoInfo{}, applyErr
+		}
+		if applied {
+			changed = true
+		}
+	} else {
+		log.Printf("EnsureRepoInfoFromRepository: resolve effective repo type settings failed repo_id=%d name=%q err=%v", repo.ID, repo.Name, resolveErr)
 	}
 
 	if changed {
@@ -325,6 +297,10 @@ func SyncRepositoryCacheFromRepoInfo(repo models.Repository, info models.RepoInf
 	}
 	if repo.Name != info.Name {
 		repo.Name = info.Name
+		changed = true
+	}
+	if repo.RepoTypeKey != info.RepoTypeKey {
+		repo.RepoTypeKey = info.RepoTypeKey
 		changed = true
 	}
 	if repo.Basic != info.Basic {
@@ -368,12 +344,12 @@ func writeRepoInfoMetadata(repo models.Repository, nextName string, nextBasic bo
 		info.Basic = nextBasic
 		changed = true
 	}
-	if info.AddButton != nextBasic {
-		info.AddButton = nextBasic
+	if nextBasic && !info.AddButton {
+		info.AddButton = true
 		changed = true
 	}
-	if info.DeleteButton != nextBasic {
-		info.DeleteButton = nextBasic
+	if nextBasic && !info.DeleteButton {
+		info.DeleteButton = true
 		changed = true
 	}
 
@@ -435,19 +411,31 @@ func buildRepoInfoFromRepository(repo models.Repository) (models.RepoInfo, error
 		return models.RepoInfo{}, err
 	}
 
+	initialRepoTypeKey := strings.TrimSpace(strings.ToLower(repo.RepoTypeKey))
+	if initialRepoTypeKey == "" {
+		if repo.Basic {
+			initialRepoTypeKey = repoTypeNone
+		} else {
+			initialRepoTypeKey = defaultRepoTypeKey
+		}
+	}
+
 	return models.RepoInfo{
-		ID:            repoInfoSingletonID,
-		RepoUUID:      repoUUID,
-		Name:          fallbackRepoDisplayName(repo),
-		Basic:         repo.Basic,
-		AddButton:     repo.Basic,
-		DeleteButton:  repo.Basic,
-		AutoNormalize: false,
-		ShowMD5:       repo.Basic,
-		ShowSize:      repo.Basic,
-		SingleMove:    repo.Basic,
-		SchemaVersion: repoInfoSchemaVersion,
-		FlagsJSON:     defaultRepoInfoFlagsJSON,
+		ID:                   repoInfoSingletonID,
+		RepoUUID:             repoUUID,
+		Name:                 fallbackRepoDisplayName(repo),
+		RepoTypeKey:          initialRepoTypeKey,
+		Basic:                repo.Basic,
+		AddButton:            repo.Basic,
+		AddDirectoryButton:   false,
+		DeleteButton:         repo.Basic,
+		AutoNormalize:        false,
+		ShowMD5:              repo.Basic,
+		ShowSize:             repo.Basic,
+		SingleMove:           repo.Basic,
+		SchemaVersion:        repoInfoSchemaVersion,
+		FlagsJSON:            defaultRepoInfoFlagsJSON,
+		SettingsOverrideJSON: defaultRepoSettingsOverrideJSON,
 	}, nil
 }
 

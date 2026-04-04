@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"fmt"
-	"lazyiso/models"
+	"lazymanga/models"
 	"net/http"
 	"path/filepath"
 	"strings"

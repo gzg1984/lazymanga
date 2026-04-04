@@ -3,7 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
-	"lazyiso/models"
+	"lazymanga/models"
 
 	"github.com/hokaccha/go-prettyjson"
 )

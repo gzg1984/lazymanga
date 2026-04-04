@@ -3,9 +3,12 @@
     <div class="flex items-center gap-4">
       <RepoTabs v-model="activeTab" @tab-reselect="handleTabReselect" />
     </div>
-    <button type="button" class="mr-4 text-sm font-semibold text-sky-700 hover:text-sky-900 hover:underline" @click="usageDialogVisible = true">
-      Welcome to Lazy Bird ISO manager
-    </button>
+    <div class="mr-4 flex items-center gap-2">
+      <RepoTypeManagerButton />
+      <button type="button" class="text-sm font-semibold text-sky-700 hover:text-sky-900 hover:underline" @click="usageDialogVisible = true">
+        Welcome to LazyManga
+      </button>
+    </div>
   </div>
   <div
     v-if="rulebookWarningVisible"
@@ -15,38 +18,19 @@
     <div class="text-sm mt-1">{{ rulebookWarningMessage }}</div>
   </div>
   <DownloadProgressPanel />
-  <el-dialog v-model="usageDialogVisible" title="欢迎使用懒鸟 ISO 管理器" width="560px">
+  <el-dialog v-model="usageDialogVisible" title="欢迎使用 LazyManga" width="560px">
     <p class="mb-3 text-slate-700 leading-7">
-       早起的鸟儿有虫吃。 <br>
-       Early Bird gets the bug.  <br>
-       Lazy Bird gets No Bug. <br>
+       欢迎使用 LazyManga。 <br>
+       Welcome to LazyManga.  <br>
+       Keep everything organized. <br>
     </p>
     <div class="rounded border border-slate-300 bg-slate-50 p-3 text-sm text-slate-600">
-      基础仓库不会进行自动扫描和自动归类。<br>
-      新建仓库，只要设置为无类型，也不会自动归类。<br>
-      新建仓库，设置为 <span style="color: red;">操作系统镜像库</span> 时，会自动扫描并归类为对应的操作系统类型。<br>
+      基础漫画仓库不会进行自动扫描和自动归类。<br>
+      新建仓库时，默认行为由仓库类型模板决定。<br>
+      你可以通过右上角的 <span style="color: #2563eb;">仓库类型</span> 入口管理模板。<br>
     </div>
     <template #footer>
       <el-button @click="usageDialogVisible = false">关闭</el-button>
-    </template>
-  </el-dialog>
-  <el-dialog
-    v-model="upgradeMigrationDialogVisible"
-    title="版本升级数据迁移说明"
-    width="560px"
-    :close-on-click-modal="false"
-  >
-    <div class="text-slate-700 leading-7 mb-3">
-      检测到你从旧版本升级后，系统已自动将旧版基础 ISO 数据迁移到新版基础仓库。
-    </div>
-    <div class="rounded border border-sky-200 bg-sky-50 p-3 text-sm text-slate-700">
-      <div>迁移成功条数: <span class="font-semibold text-sky-700">{{ migrationNotice.migratedCount }}</span></div>
-      <div>跳过条数: <span class="font-semibold text-sky-700">{{ migrationNotice.skippedCount }}</span></div>
-      <div>旧数据总条数: <span class="font-semibold text-sky-700">{{ migrationNotice.totalCount }}</span></div>
-      <div class="mt-1 break-all">迁移时间: {{ migrationNotice.migratedAt || '-' }}</div>
-    </div>
-    <template #footer>
-      <el-button type="primary" @click="upgradeMigrationDialogVisible = false">我知道了</el-button>
     </template>
   </el-dialog>
   <template v-if="activeRepoId !== null">
@@ -68,6 +52,7 @@ import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import emitter from '../eventBus'
 import RepoTabs from '../components/RepoTabs.vue'
+import RepoTypeManagerButton from '../components/RepoTypeManagerButton.vue'
 import RepoPathButton from '../components/RepoPathButton.vue'
 import RepoSettingsButton from '../components/RepoSettingsButton.vue'
 import RepoMergeButton from '../components/RepoMergeButton.vue'
@@ -81,13 +66,6 @@ const router = useRouter()
 const activeTab = ref('')
 const repoRefreshSignal = ref(0)
 const usageDialogVisible = ref(false)
-const upgradeMigrationDialogVisible = ref(false)
-const migrationNotice = ref({
-  migratedCount: 0,
-  skippedCount: 0,
-  totalCount: 0,
-  migratedAt: ''
-})
 const rulebookStatus = ref(null)
 const activeRepoId = computed(() => {
   const value = Number(activeTab.value)
@@ -113,30 +91,6 @@ async function fetchRuleBookStatus() {
     rulebookStatus.value = data || null
   } catch (_) {
     // keep silent for non-critical status polling
-  }
-}
-
-async function fetchUpgradeMigrationNotice() {
-  try {
-    const res = await fetch('/api/upgrade/migration-notice')
-    if (!res.ok) {
-      return
-    }
-
-    const data = await res.json()
-    if (!data?.show) {
-      return
-    }
-
-    migrationNotice.value = {
-      migratedCount: Number(data.migrated_count || 0),
-      skippedCount: Number(data.skipped_count || 0),
-      totalCount: Number(data.total_legacy_count || 0),
-      migratedAt: data.migrated_at || ''
-    }
-    upgradeMigrationDialogVisible.value = true
-  } catch (_) {
-    // keep silent for non-critical migration notice fetching
   }
 }
 
@@ -189,7 +143,7 @@ async function resolveBasicRepoId() {
     const basicRepo = repos.find((repo) => !!repo?.basic)
     return Number(basicRepo?.id || repos[0]?.id || 0) || null
   } catch (e) {
-    ElMessage.error(e.message || '获取基础仓库失败')
+    ElMessage.error(e.message || '获取基础漫画仓库失败')
     return null
   }
 }
@@ -247,6 +201,5 @@ watch(
 
 onMounted(() => {
   fetchRuleBookStatus()
-  fetchUpgradeMigrationNotice()
 })
 </script>

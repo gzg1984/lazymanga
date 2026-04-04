@@ -2,10 +2,9 @@ package handlers
 
 import (
 	"errors"
-	"lazyiso/models"
+	"lazymanga/models"
 	"net/http"
 	"strings"
-	"syscall"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -58,14 +57,11 @@ func GetRepoStorageSummary(c *gin.Context) {
 		sizeMissingCount = 0
 	}
 
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(rootAbs, &stat); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "statfs failed: " + err.Error()})
+	availableBytes, totalDiskBytes, err := getStorageStats(rootAbs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage stats failed: " + err.Error()})
 		return
 	}
-
-	availableBytes := int64(stat.Bavail) * int64(stat.Bsize)
-	totalDiskBytes := int64(stat.Blocks) * int64(stat.Bsize)
 
 	c.JSON(http.StatusOK, gin.H{
 		"repo_id":             repo.ID,

@@ -1,0 +1,14 @@
+package: cloud.lazybird.app.lazymanga
+version: 0.0.1
+name: Kavita漫画助手
+description: Kavita漫画助手, 方便管理漫画目录并导出给Kavita漫画软件使用
+author: Lazy Bird
+license: https://choosealicense.com/licenses/mit/
+homepage: 
+locales:
+  zh:
+    name: Kavita漫画助手
+    description: Kavita漫画助手 用于管理与整理漫画内容库
+  zh_CN:
+    name: Kavita漫画助手
+    description: Kavita漫画助手 用于管理与整理漫画内容库

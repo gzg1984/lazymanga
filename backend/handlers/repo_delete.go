@@ -3,7 +3,7 @@ package handlers
 import (
 	"errors"
 	"io"
-	"lazyiso/models"
+	"lazymanga/models"
 	"net/http"
 	"os"
 	"strings"

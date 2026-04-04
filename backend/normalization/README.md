@@ -86,7 +86,7 @@ func (s MyStep) Process(repoID uint, repoDB *gorm.DB, rootAbs string, record *mo
 From `backend/`:
 
 ```bash
-go test $(go list ./... | grep -v '^lazyiso/client$')
+go test $(go list ./... | grep -v '^lazymanga/client$')
 ```
 
 Runtime log keywords to watch:

@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"lazyiso/models"
-	"lazyiso/sys"
+	"lazymanga/models"
+	"lazymanga/sys"
 
 	"github.com/gin-gonic/gin"
 )

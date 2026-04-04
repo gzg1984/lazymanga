@@ -22,10 +22,16 @@
 
         <div class="form-row type-row">
           <span class="form-label">仓库类型</span>
-          <el-radio-group v-model="createForm.repoType" :disabled="addRepoBusy">
-            <el-radio-button label="none">无类型</el-radio-button>
-            <el-radio-button label="os">操作系统镜像库</el-radio-button>
-          </el-radio-group>
+          <div class="form-main-col">
+            <div v-if="loadingRepoTypes" class="muted">加载仓库类型中...</div>
+            <template v-else-if="repoTypeOptions.length">
+              <el-radio-group v-model="createForm.repoType" :disabled="addRepoBusy">
+                <el-radio-button v-for="item in repoTypeOptions" :key="item.key" :label="item.key">{{ item.name }}</el-radio-button>
+              </el-radio-group>
+              <div v-if="selectedRepoTypeDescription" class="type-help">{{ selectedRepoTypeDescription }}</div>
+            </template>
+            <div v-else class="muted">暂无可用仓库类型，请先通过顶部入口创建模板。</div>
+          </div>
         </div>
 
         <div class="form-row type-row">
@@ -122,12 +128,14 @@ const activeId = ref(props.modelValue || '')
 const addDialogVisible = ref(false)
 const loadingExternalDevices = ref(false)
 const loadingFolders = ref(false)
+const loadingRepoTypes = ref(false)
 const creatingRepo = ref(false)
 const externalDevices = ref([])
 const folderList = ref([])
+const repoTypeOptions = ref([])
 const browseDir = ref('')
 const createForm = ref({
-  repoType: 'none',
+  repoType: 'manga',
   isInternal: true,
   externalDeviceName: '',
   rootPath: '',
@@ -141,7 +149,15 @@ const browseRepoId = computed(() => {
 })
 
 const addRepoBusy = computed(() => {
-  return creatingRepo.value || loadingExternalDevices.value || loadingFolders.value
+  return creatingRepo.value || loadingExternalDevices.value || loadingFolders.value || loadingRepoTypes.value
+})
+
+const selectedRepoTypeOption = computed(() => {
+  return repoTypeOptions.value.find((item) => item.key === createForm.value.repoType) || null
+})
+
+const selectedRepoTypeDescription = computed(() => {
+  return String(selectedRepoTypeOption.value?.description || '').trim()
 })
 
 const canCreateRepo = computed(() => {
@@ -228,6 +244,41 @@ async function fetchRepos() {
   }
 }
 
+function getDefaultRepoTypeKey(items = repoTypeOptions.value) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return 'manga'
+  }
+
+  const preferred = items.find((item) => item.key === 'manga' && item.enabled !== false)
+  if (preferred) return preferred.key
+
+  const fallback = items.find((item) => item.enabled !== false)
+  return fallback?.key || items[0]?.key || 'manga'
+}
+
+async function fetchRepoTypes() {
+  loadingRepoTypes.value = true
+  try {
+    const res = await fetch('/api/repo-types')
+    if (!res.ok) {
+      throw new Error(await parseErrorMessage(res, '获取仓库类型失败'))
+    }
+
+    const data = await res.json()
+    repoTypeOptions.value = Array.isArray(data?.items) ? data.items : []
+    const hasSelected = repoTypeOptions.value.some((item) => item.key === createForm.value.repoType)
+    if (!hasSelected) {
+      createForm.value.repoType = getDefaultRepoTypeKey(repoTypeOptions.value)
+    }
+    syncNameIfAuto()
+  } catch (e) {
+    repoTypeOptions.value = []
+    ElMessage.error(e.message || '获取仓库类型失败')
+  } finally {
+    loadingRepoTypes.value = false
+  }
+}
+
 function normalizePathInput(v) {
   return String(v || '').replace(/\\/g, '/').trim()
 }
@@ -238,7 +289,7 @@ function deriveSuggestedName() {
     : `外部-${String(createForm.value.externalDeviceName || '').trim() || '未选设备'}`
   const rawPath = normalizePathInput(createForm.value.rootPath)
   const pathLabel = !rawPath ? '未设置路径' : (rawPath === '/' ? 'root' : rawPath.replace(/^\/+/, '').replace(/\//g, '-'))
-  const typeLabel = createForm.value.repoType === 'os' ? '操作系统镜像库' : '无类型'
+  const typeLabel = selectedRepoTypeOption.value?.name || String(createForm.value.repoType || '仓库类型').trim() || '仓库类型'
   return `${scope}-${pathLabel}-${typeLabel}`
 }
 
@@ -372,9 +423,10 @@ async function onCreateTypeChanged() {
 
 async function openAdd() {
   await fetchRepos()
+  await fetchRepoTypes()
   addDialogVisible.value = true
   createForm.value = {
-    repoType: 'none',
+    repoType: getDefaultRepoTypeKey(repoTypeOptions.value),
     isInternal: true,
     externalDeviceName: '',
     rootPath: '',
@@ -438,11 +490,14 @@ async function submitCreateRepo() {
 
 onMounted(() => {
   fetchRepos()
+  fetchRepoTypes()
   emitter.on('refresh-all', fetchRepos)
+  emitter.on('repo-types-updated', fetchRepoTypes)
 })
 
 onUnmounted(() => {
   emitter.off('refresh-all', fetchRepos)
+  emitter.off('repo-types-updated', fetchRepoTypes)
 })
 </script>
 
@@ -506,6 +561,13 @@ onUnmounted(() => {
 
 .external-row {
   align-items: flex-start;
+}
+
+.type-help {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .form-label {

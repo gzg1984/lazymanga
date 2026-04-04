@@ -4,7 +4,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"io"
-	"lazyiso/models"
+	"lazymanga/models"
 	"os"
 	"strings"
 

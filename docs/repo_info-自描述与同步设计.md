@@ -29,7 +29,7 @@
 本设计不追求把所有仓库元数据都塞进 repo.db，而是强调职责分离：
 
 - repo.db 负责描述“这个仓库自己是谁”。
-- 全局 lazyiso.db 负责描述“当前这台机器如何接入这个仓库”。
+- 全局 lazymanga.db 负责描述“当前这台机器如何接入这个仓库”。
 
 ## 2. 核心原则
 
@@ -43,7 +43,7 @@
    - 用于描述仓库自身的稳定身份与元属性。
 
 2. 本机接入注册数据
-   - 保存在全局 lazyiso.db 的 repositories 表中。
+   - 保存在全局 lazymanga.db 的 repositories 表中。
    - 用于描述当前应用实例如何找到并接入这个仓库。
 
 ### 2.2 单一主真相
@@ -488,7 +488,7 @@ func RefreshRepositoryMetadataCaches(repos []models.Repository) (int, []error)
 
 ### 10.1 不要过早把 root_path 放进 repo_info
 
-当前基础仓库已经表现出“root_path 与 lazyiso.db 所在目录绑定”的需求，这恰恰说明 root_path 是部署环境相关信息。把它做成 repo_info 主数据，会弱化设计边界。
+当前基础仓库已经表现出“root_path 与 lazymanga.db 所在目录绑定”的需求，这恰恰说明 root_path 是部署环境相关信息。把它做成 repo_info 主数据，会弱化设计边界。
 
 ### 10.2 不要依赖名字做长期绑定
 
@@ -496,7 +496,7 @@ func RefreshRepositoryMetadataCaches(repos []models.Repository) (int, []error)
 
 ### 10.3 不要试图跨两个 sqlite 做强事务
 
-repo.db 与 lazyiso.db 是两个独立数据库文件，强事务会增加复杂度且收益有限。第一版应接受最终一致性，并用启动同步做修复机制。
+repo.db 与 lazymanga.db 是两个独立数据库文件，强事务会增加复杂度且收益有限。第一版应接受最终一致性，并用启动同步做修复机制。
 
 ### 10.4 不要允许 repo_info 静默多行
 

@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"lazyiso/models"
+	"lazymanga/models"
 
 	"gorm.io/gorm"
 )

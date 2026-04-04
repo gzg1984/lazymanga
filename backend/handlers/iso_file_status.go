@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"errors"
-	"lazyiso/models"
-	"lazyiso/sys"
+	"lazymanga/models"
+	"lazymanga/sys"
 	"log"
 	"net/http"
 	"os"

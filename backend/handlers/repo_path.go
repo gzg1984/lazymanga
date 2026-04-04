@@ -3,7 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
-	"lazyiso/models"
+	"lazymanga/models"
 	"log"
 	"net/http"
 	"os"

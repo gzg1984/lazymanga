@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"fmt"
-	"lazyiso/models"
-	"lazyiso/normalization"
+	"lazymanga/models"
+	"lazymanga/normalization"
 	"log"
 	"net/http"
 	"os"

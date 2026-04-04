@@ -28,7 +28,7 @@ function openFlowLog(message, extra = null) {
 }
 
 const resultTitle = computed(() => {
-  if (status.value === 'success') return '已导入基础仓库'
+  if (status.value === 'success') return '已导入基础漫画仓库'
   if (status.value === 'warning') return '文件已存在'
   if (status.value === 'error') return '导入失败'
   return '处理中'
@@ -126,7 +126,7 @@ async function processOpenRequest() {
 
   if (res.status === 409) {
     status.value = 'warning'
-    resultMessage.value = '该文件已在基础仓库中，已触发刷新。'
+    resultMessage.value = '该文件已在基础漫画仓库中，已触发刷新。'
     await redirectToHome(basicRepoId)
     return
   }

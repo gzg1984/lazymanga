@@ -3,8 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"lazyiso/models"
-	"lazyiso/normalization"
+	"lazymanga/models"
+	"lazymanga/normalization"
 	"net/http"
 	"regexp"
 	"strings"

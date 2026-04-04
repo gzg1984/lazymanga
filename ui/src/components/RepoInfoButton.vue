@@ -3,7 +3,7 @@
     <el-button circle size="small" :icon="Setting" @click="openDialog" :disabled="loading">
     </el-button>
 
-    <el-dialog v-model="dialogVisible" title="Repo Info" width="620px">
+    <el-dialog v-model="dialogVisible" title="Repo Info" width="600px">
       <div v-loading="loading" class="repo-info-content">
         <div v-if="errorMessage" class="text-sm text-red-600 mb-3">{{ errorMessage }}</div>
 
@@ -12,6 +12,7 @@
             <div class="info-row"><span class="info-label">ID</span><span>{{ repoInfo.id }}</span></div>
             <div class="info-row"><span class="info-label">Repo UUID</span><span>{{ repoInfo.repo_uuid || '-' }}</span></div>
             <div class="info-row"><span class="info-label">Name</span><span>{{ repoInfo.name || '-' }}</span></div>
+            <div class="info-row"><span class="info-label">Repo Type</span><span>{{ repoInfo.repo_type_key || '-' }}</span></div>
             <div class="info-row"><span class="info-label">Schema Version</span><span>{{ repoInfo.schema_version }}</span></div>
             <div class="info-row"><span class="info-label">Created At</span><span>{{ repoInfo.created_at || '-' }}</span></div>
             <div class="info-row"><span class="info-label">Updated At</span><span>{{ repoInfo.updated_at || '-' }}</span></div>
@@ -25,46 +26,43 @@
           </div>
 
           <div class="mt-4">
-            <div class="text-sm font-semibold text-slate-700 mb-2">Flags</div>
-            <div class="flags-grid">
-              <div class="flag-row">
-                <span class="flag-key">basic</span>
-                <el-checkbox :model-value="!!repoInfo.basic" disabled />
-              </div>
-              <div class="flag-row">
-                <span class="flag-key">add_button</span>
-                <el-checkbox :model-value="!!repoInfo.add_button" disabled />
-              </div>
-              <div class="flag-row">
-                <span class="flag-key">delete_button</span>
-                <el-checkbox :model-value="!!repoInfo.delete_button" disabled />
-              </div>
-              <div class="flag-row">
-                <span class="flag-key">auto_normalize</span>
-                <el-checkbox :model-value="!!repoInfo.auto_normalize" disabled />
-              </div>
-              <div class="flag-row">
-                <span class="flag-key">show_md5</span>
-                <el-checkbox :model-value="!!repoInfo.show_md5" disabled />
-              </div>
-              <div class="flag-row">
-                <span class="flag-key">show_size</span>
-                <el-checkbox :model-value="!!repoInfo.show_size" disabled />
-              </div>
-              <div class="flag-row">
-                <span class="flag-key">single_move</span>
-                <el-checkbox :model-value="!!repoInfo.single_move" disabled />
-              </div>
-              <div v-for="entry in extraFlagEntries" :key="entry.key" class="flag-row">
-                <span class="flag-key">{{ entry.key }}</span>
-                <template v-if="entry.isBoolean">
-                  <el-checkbox :model-value="entry.boolValue" disabled />
-                </template>
-                <template v-else>
-                  <span class="flag-value">{{ entry.displayValue }}</span>
-                </template>
-              </div>
-            </div>
+            <el-tabs v-model="activeTab" class="repo-info-tabs">
+              <el-tab-pane label="Flag" name="flags">
+                <div class="tab-section-list">
+                  <div v-for="entry in boolEntries" :key="entry.key" class="status-row">
+                    <span class="flag-key">{{ entry.label }}</span>
+                    <el-tag :type="entry.value ? 'success' : 'info'" size="small">{{ entry.value ? '已启用' : '已关闭' }}</el-tag>
+                  </div>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="时间" name="times">
+                <div v-if="timeEntries.length" class="tab-section-list">
+                  <div v-for="entry in timeEntries" :key="entry.key" class="detail-row">
+                    <div class="detail-title">{{ entry.label }}</div>
+                    <div class="detail-value">{{ entry.display }}</div>
+                    <div class="detail-hint">{{ entry.hint }}</div>
+                  </div>
+                </div>
+                <div v-else class="empty-tip">暂无额外时间记录。</div>
+              </el-tab-pane>
+
+              <el-tab-pane label="其他" name="others">
+                <div v-if="otherEntries.length" class="tab-section-list">
+                  <div v-for="entry in otherEntries" :key="entry.key" class="detail-row">
+                    <div class="detail-title">{{ entry.label }}</div>
+                    <template v-if="entry.multiline">
+                      <pre class="other-code">{{ entry.display }}</pre>
+                    </template>
+                    <template v-else>
+                      <div class="detail-value">{{ entry.display }}</div>
+                    </template>
+                    <div v-if="entry.hint" class="detail-hint">{{ entry.hint }}</div>
+                  </div>
+                </div>
+                <div v-else class="empty-tip">暂无其他扩展信息。</div>
+              </el-tab-pane>
+            </el-tabs>
           </div>
         </template>
       </div>
@@ -94,6 +92,7 @@ const errorMessage = ref('')
 const repoInfo = ref(null)
 const repoRuleBookBinding = ref(null)
 const ruleBookBindingError = ref('')
+const activeTab = ref('flags')
 
 const parsedFlags = computed(() => {
   const raw = repoInfo.value?.flags_json
@@ -109,21 +108,6 @@ const parsedFlags = computed(() => {
   }
 
   return {}
-})
-
-const extraFlagEntries = computed(() => {
-  return Object.keys(parsedFlags.value)
-    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
-    .map((key) => {
-      const value = parsedFlags.value[key]
-      const isBoolean = typeof value === 'boolean'
-      return {
-        key,
-        isBoolean,
-        boolValue: isBoolean ? value : false,
-        displayValue: isBoolean ? '' : JSON.stringify(value)
-      }
-    })
 })
 
 const effectiveRuleBookName = computed(() => {
@@ -145,6 +129,157 @@ const effectiveRuleBookVersion = computed(() => {
 const ruleBookSource = computed(() => {
   return repoRuleBookBinding.value?.binding_source || (repoRuleBookBinding.value ? 'repo binding api' : 'flags_json fallback')
 })
+
+const boolEntries = computed(() => {
+  const info = repoInfo.value || {}
+  return [
+    { key: 'basic', label: '基础漫画仓库', value: !!info.basic },
+    { key: 'add_button', label: '允许添加文件', value: !!info.add_button },
+    { key: 'add_directory_button', label: '允许添加目录', value: !!info.add_directory_button },
+    { key: 'delete_button', label: '允许删除内容', value: !!info.delete_button },
+    { key: 'auto_normalize', label: '自动归类', value: !!info.auto_normalize },
+    { key: 'show_md5', label: '显示 MD5', value: !!info.show_md5 },
+    { key: 'show_size', label: '显示大小', value: !!info.show_size },
+    { key: 'single_move', label: '允许单条移动', value: !!info.single_move }
+  ]
+})
+
+const timeEntries = computed(() => {
+  const info = repoInfo.value || {}
+  const entries = []
+
+  if (info.created_at) {
+    entries.push({
+      key: 'created_at',
+      label: '仓库信息创建时间',
+      display: formatDateTime(info.created_at),
+      hint: '这条仓库说明信息首次写入 repo.db 的时间。'
+    })
+  }
+  if (info.updated_at) {
+    entries.push({
+      key: 'updated_at',
+      label: '仓库信息最后更新时间',
+      display: formatDateTime(info.updated_at),
+      hint: '最近一次修改该仓库配置或元信息的时间。'
+    })
+  }
+
+  Object.entries(parsedFlags.value).forEach(([key, value]) => {
+    if (!looksLikeTimeEntry(key, value)) return
+    entries.push({
+      key,
+      label: humanizeTimeLabel(key),
+      display: formatDateTime(value),
+      hint: humanizeTimeHint(key)
+    })
+  })
+
+  return entries
+})
+
+const otherEntries = computed(() => {
+  const entries = []
+  const overrideRaw = String(repoInfo.value?.settings_override_json || '').trim()
+
+  entries.push({
+    key: 'settings_override_json',
+    label: '当前 Overlay 配置',
+    display: formatStructuredJSON(overrideRaw, '（当前全部继承模板，无额外覆盖）'),
+    multiline: true,
+    hint: '这里显示这个仓库自己覆盖模板的差异项。'
+  })
+
+  Object.keys(parsedFlags.value)
+    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
+    .forEach((key) => {
+      const value = parsedFlags.value[key]
+      if (typeof value === 'boolean' || looksLikeTimeEntry(key, value)) {
+        return
+      }
+
+      entries.push({
+        key,
+        label: humanizeOtherLabel(key),
+        display: formatOtherValue(value),
+        multiline: typeof value === 'object',
+        hint: '这是 repo_info.flags_json 中的扩展数据。'
+      })
+    })
+
+  return entries
+})
+
+function looksLikeTimeEntry(key, value) {
+  if (typeof value !== 'string') return false
+  const lowerKey = String(key || '').toLowerCase()
+  if (lowerKey.endsWith('_at') || lowerKey.includes('time')) {
+    return true
+  }
+  return !Number.isNaN(Date.parse(value)) && value.includes('T')
+}
+
+function formatDateTime(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return String(value || '-')
+  }
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function humanizeTimeLabel(key) {
+  const mapping = {
+    legacy_base_iso_to_repoisos_migrated_at: '旧版基础数据迁移时间',
+    legacy_base_iso_to_repoisos_notice_shown_at: '升级提示已读时间',
+    legacy_base_iso_repoisos_metadata_backfill_at: '基础仓库元数据补齐时间'
+  }
+  return mapping[key] || `时间记录：${key}`
+}
+
+function humanizeTimeHint(key) {
+  const mapping = {
+    legacy_base_iso_to_repoisos_migrated_at: '记录旧版基础 ISO 数据迁移到仓库模式的执行时间。',
+    legacy_base_iso_to_repoisos_notice_shown_at: '记录用户已阅读升级迁移提示的时间。',
+    legacy_base_iso_repoisos_metadata_backfill_at: '记录基础仓库补齐文件元数据的时间。'
+  }
+  return mapping[key] || '这是系统记录的一次状态时间点。'
+}
+
+function humanizeOtherLabel(key) {
+  const mapping = {
+    legacy_base_iso_to_repoisos_migrated_count: '旧版迁移成功条数',
+    legacy_base_iso_to_repoisos_skipped_count: '旧版迁移跳过条数',
+    legacy_base_iso_to_repoisos_source: '迁移来源',
+    legacy_base_iso_repoisos_metadata_backfill_count: '元数据补齐条数',
+    rulebook_name: 'RuleBook 名称（flags）',
+    rulebook_version: 'RuleBook 版本（flags）'
+  }
+  return mapping[key] || key
+}
+
+function formatStructuredJSON(raw, emptyText = '-') {
+  const trimmed = String(raw || '').trim()
+  if (!trimmed || trimmed === '{}' || trimmed === 'null') {
+    return emptyText
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed)
+    return JSON.stringify(parsed, null, 2)
+  } catch (_) {
+    return trimmed
+  }
+}
+
+function formatOtherValue(value) {
+  if (value === null || typeof value === 'undefined') {
+    return '-'
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value, null, 2)
+  }
+  return String(value)
+}
 
 async function parseErrorMessage(res, fallback) {
   try {
@@ -212,6 +347,7 @@ async function fetchRepoInfo(showErrorToast = false) {
 }
 
 function openDialog() {
+  activeTab.value = 'flags'
   dialogVisible.value = true
   fetchRepoInfo(true)
 }
@@ -251,28 +387,73 @@ watch(
   font-weight: 600;
 }
 
-.flags-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.repo-info-tabs :deep(.el-tabs__header) {
+  margin-bottom: 10px;
 }
 
-.flag-row {
+.tab-section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.status-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
 }
 
 .flag-key {
-  width: 220px;
-  flex-shrink: 0;
   color: #334155;
   font-size: 13px;
+  font-weight: 600;
 }
 
-.flag-value {
+.detail-row {
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.detail-title {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.detail-value {
+  margin-top: 4px;
   color: #475569;
   font-size: 13px;
   word-break: break-all;
+}
+
+.detail-hint {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.other-code {
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.empty-tip {
+  color: #64748b;
+  font-size: 13px;
 }
 </style>

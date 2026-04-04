@@ -9,7 +9,7 @@
         <div v-if="isBasicRepo" class="basic-repo-tip">
           <div class="basic-repo-tip-line">
             <el-icon class="basic-repo-tip-icon"><WarningFilled /></el-icon>
-            <span>基础仓库的仓库根路径为系统存储根目录，所以</span>
+            <span>基础漫画仓库的仓库根路径为系统存储根目录，所以</span>
             <span class="basic-repo-tip-danger">不会自动扫描</span>
             <span>。</span>
           </div>
@@ -81,7 +81,7 @@ const displayRepoPath = computed(() => {
 })
 const pathButtonText = computed(() => {
   if (isBasicRepo.value) {
-    return '仓库路径：基础仓库'
+    return '仓库路径：基础漫画仓库'
   }
   return `仓库路径：${currentRepoPath.value || '（未设置）'} （${repoTypeLabel.value}）`
 })
@@ -156,7 +156,7 @@ function closeDialog() {
 
 async function refreshRepo() {
   if (isBasicRepo.value) {
-    ElMessage.info('基础仓库没有仓库根路径，所有镜像需要手工添加')
+    ElMessage.info('基础漫画仓库没有仓库根路径，所有内容需要手工添加')
     return
   }
 

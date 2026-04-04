@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"errors"
-	"lazyiso/models"
+	"lazymanga/models"
 	"log"
 	"net/http"
 

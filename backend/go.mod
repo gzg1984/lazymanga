@@ -1,4 +1,4 @@
-module lazyiso
+module lazymanga
 
 go 1.20
 

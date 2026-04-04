@@ -1,7 +1,7 @@
 package client_test
 
 import (
-	"lazyiso/client"
+	"lazymanga/client"
 	"testing"
 )
 

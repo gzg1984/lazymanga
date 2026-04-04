@@ -3,8 +3,8 @@ package handlers
 import (
 	"errors"
 	"fmt"
-	"lazyiso/models"
-	"lazyiso/normalization"
+	"lazymanga/models"
+	"lazymanga/normalization"
 	"log"
 	"net/http"
 	"os"
@@ -18,19 +18,19 @@ import (
 	"gorm.io/gorm"
 )
 
-const basicRepoName = "基础仓库"
+const basicRepoName = "基础漫画仓库"
 
 // basicRepoDBDir points to the directory used to persist basic repo.db.
-// It follows the directory of global lazyiso.db (configured by --db).
+// It follows the directory of global lazymanga.db (configured by --db).
 var basicRepoDBDir = "/lzcapp/var"
 
 // EnsureBasicRepository makes sure a named baseline repository exists.
-func EnsureBasicRepository(lazyisoDBPath string) error {
+func EnsureBasicRepository(lazymangaDBPath string) error {
 	if db == nil {
 		return errors.New("database is not initialized")
 	}
 
-	basicDBDir, err := deriveBasicRepoDBDir(lazyisoDBPath)
+	basicDBDir, err := deriveBasicRepoDBDir(lazymangaDBPath)
 	if err != nil {
 		return err
 	}
@@ -48,11 +48,12 @@ func EnsureBasicRepository(lazyisoDBPath string) error {
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		repo = models.Repository{
-			Name:       basicRepoName,
-			Basic:      true,
-			RootPath:   baseRootPath,
-			DBFile:     "repo.db",
-			IsInternal: true,
+			Name:        basicRepoName,
+			RepoTypeKey: repoTypeNone,
+			Basic:       true,
+			RootPath:    baseRootPath,
+			DBFile:      "repo.db",
+			IsInternal:  true,
 		}
 		if createErr := db.Create(&repo).Error; createErr != nil {
 			return createErr
@@ -67,6 +68,10 @@ func EnsureBasicRepository(lazyisoDBPath string) error {
 	changed := false
 	if !repo.Basic {
 		repo.Basic = true
+		changed = true
+	}
+	if repo.Name != basicRepoName {
+		repo.Name = basicRepoName
 		changed = true
 	}
 	if repo.RootPath != baseRootPath {
@@ -85,13 +90,23 @@ func EnsureBasicRepository(lazyisoDBPath string) error {
 		repo.ExternalDeviceName = ""
 		changed = true
 	}
+	if strings.TrimSpace(repo.RepoTypeKey) != repoTypeNone {
+		repo.RepoTypeKey = repoTypeNone
+		changed = true
+	}
 
 	if !changed {
+		if err := writeRepoInfoMetadata(repo, basicRepoName, true); err != nil {
+			return err
+		}
 		log.Printf("EnsureBasicRepository: already synced id=%d name=%q root=%q dbfile=%q", repo.ID, repo.Name, repo.RootPath, repo.DBFile)
 		return nil
 	}
 
 	if err := db.Save(&repo).Error; err != nil {
+		return err
+	}
+	if err := writeRepoInfoMetadata(repo, basicRepoName, true); err != nil {
 		return err
 	}
 
@@ -107,10 +122,10 @@ func deriveBasicRepoRootPath() (string, error) {
 	return filepath.ToSlash(root), nil
 }
 
-func deriveBasicRepoDBDir(lazyisoDBPath string) (string, error) {
-	v := strings.TrimSpace(lazyisoDBPath)
+func deriveBasicRepoDBDir(lazymangaDBPath string) (string, error) {
+	v := strings.TrimSpace(lazymangaDBPath)
 	if v == "" {
-		return "", errors.New("lazyiso db path is required")
+		return "", errors.New("lazymanga db path is required")
 	}
 	absDBPath, err := filepath.Abs(v)
 	if err != nil {
@@ -214,6 +229,7 @@ func CreateRepo(c *gin.Context) {
 
 	repo := models.Repository{
 		Name:               req.Name,
+		RepoTypeKey:        repoType,
 		Basic:              false,
 		RootPath:           normalizedRootPath,
 		DBFile:             req.DBFile,
@@ -252,7 +268,7 @@ func CreateRepo(c *gin.Context) {
 		repo.RepoUUID = repoUUID
 	}
 
-	if err := db.Select("RepoUUID", "Name", "Basic", "RootPath", "DBFile", "IsInternal", "ExternalDeviceName").Create(&repo).Error; err != nil {
+	if err := db.Select("RepoUUID", "Name", "RepoTypeKey", "Basic", "RootPath", "DBFile", "IsInternal", "ExternalDeviceName").Create(&repo).Error; err != nil {
 		log.Printf("CreateRepo: insert failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db insert failed: " + err.Error()})
 		return
@@ -261,6 +277,7 @@ func CreateRepo(c *gin.Context) {
 	requestedInternal := isInternal
 	requestedExternalDeviceName := externalDeviceName
 	requestedRootPath := normalizedRootPath
+	requestedRepoTypeKey := repoType
 	if err := db.First(&repo, repo.ID).Error; err != nil {
 		log.Printf("CreateRepo: reload after insert failed id=%d: %v", repo.ID, err)
 		_ = db.Delete(&models.Repository{}, repo.ID).Error
@@ -269,9 +286,10 @@ func CreateRepo(c *gin.Context) {
 	}
 	if repo.IsInternal != requestedInternal ||
 		repo.ExternalDeviceName != requestedExternalDeviceName ||
-		repo.RootPath != requestedRootPath {
+		repo.RootPath != requestedRootPath ||
+		strings.TrimSpace(repo.RepoTypeKey) != requestedRepoTypeKey {
 		log.Printf(
-			"CreateRepo: persisted repository mismatch id=%d requested_internal=%t actual_internal=%t requested_external_device=%q actual_external_device=%q requested_root=%q actual_root=%q",
+			"CreateRepo: persisted repository mismatch id=%d requested_internal=%t actual_internal=%t requested_external_device=%q actual_external_device=%q requested_root=%q actual_root=%q requested_repo_type=%q actual_repo_type=%q",
 			repo.ID,
 			requestedInternal,
 			repo.IsInternal,
@@ -279,6 +297,8 @@ func CreateRepo(c *gin.Context) {
 			repo.ExternalDeviceName,
 			requestedRootPath,
 			repo.RootPath,
+			requestedRepoTypeKey,
+			repo.RepoTypeKey,
 		)
 		_ = db.Delete(&models.Repository{}, repo.ID).Error
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "persisted repository binding mismatch after insert"})

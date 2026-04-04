@@ -3,7 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
-	"lazyiso/models"
+	"lazymanga/models"
 	"log"
 	"os"
 	"sort"
@@ -26,7 +26,7 @@ type repoBindingAudit struct {
 }
 
 func AuditRepositoryBindingsFromEnv() error {
-	autoDelete := parseBoolEnv("LAZYISO_AUTO_DELETE_DUPLICATE_REPOS")
+	autoDelete := parseBoolEnv("LAZYMANGA_AUTO_DELETE_DUPLICATE_REPOS")
 	return AuditRepositoryBindings(autoDelete)
 }
 

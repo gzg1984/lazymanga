@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"fmt"
-	"lazyiso/models"
+	"lazymanga/models"
 
 	"github.com/gin-gonic/gin"
 )

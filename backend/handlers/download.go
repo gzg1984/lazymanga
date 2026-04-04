@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"lazyiso/sys"
+	"lazymanga/sys"
 	"log"
 	"net/http"
 	"os"

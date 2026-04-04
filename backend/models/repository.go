@@ -6,6 +6,7 @@ type Repository struct {
 	ID                 uint      `gorm:"primaryKey;autoIncrement;index" json:"id"`
 	RepoUUID           string    `gorm:"index" json:"repo_uuid"`
 	Name               string    `json:"name"`
+	RepoTypeKey        string    `gorm:"index;default:manga" json:"repo_type_key"`
 	Basic              bool      `gorm:"not null;default:false" json:"basic"`
 	RootPath           string    `json:"root_path"`
 	DBFile             string    `json:"db_filename"`

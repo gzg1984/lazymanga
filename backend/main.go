@@ -2,8 +2,8 @@ package main
 
 import (
 	"flag"
-	"lazyiso/database"
-	"lazyiso/handlers"
+	"lazymanga/database"
+	"lazymanga/handlers"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -11,18 +11,19 @@ import (
 
 func main() {
 	// 定义命令行参数
-	dbPath := flag.String("db", "/lzcapp/var/lazyiso.db", "Path to the SQLite database file")
+	dbPath := flag.String("db", "/lzcapp/var/lazymanga.db", "Path to the SQLite database file")
 	flag.Parse()
 
 	db := database.InitDB(*dbPath)
 
 	handlers.SetDB(db)
+	if err := handlers.EnsureDefaultRepoTypes(); err != nil {
+		log.Printf("初始化仓库类型模板失败: %v", err)
+	}
 	if err := handlers.EnsureBasicRepository(*dbPath); err != nil {
 		log.Printf("初始化基础仓库失败: %v", err)
 	}
-	if err := handlers.MigrateLegacyBaseISOsOnce(); err != nil {
-		log.Printf("迁移旧版基础ISO数据失败: %v", err)
-	}
+	// V1 暂不处理旧版本升级迁移；后续需要兼容升级时再恢复此入口。
 	if err := handlers.AuditRepositoryBindingsFromEnv(); err != nil {
 		log.Printf("启动仓库绑定审计失败: %v", err)
 	}
@@ -50,7 +51,6 @@ func main() {
 	r.GET("/isos/:id/file-status", handlers.CheckISOFileStatus)
 	r.GET("/rulebook/status", handlers.GetRuleBookStatus)
 	r.GET("/rulebooks", handlers.ListRuleBooks)
-	r.GET("/upgrade/migration-notice", handlers.GetLegacyBaseISOMigrationNotice)
 	//r.GET("/reboot", handlers.Reboot)
 	r.POST("/addiso", handlers.CreateISOs)
 	r.GET("/open", handlers.HandleOpen)
@@ -62,6 +62,12 @@ func main() {
 	r.GET("/repos", handlers.GetRepos)
 	r.POST("/repos", handlers.CreateRepo)
 	r.PUT("/repos/:id", handlers.UpdateRepo)
+	r.GET("/repo-types", handlers.ListRepoTypes)
+	r.POST("/repo-types", handlers.CreateRepoType)
+	r.PUT("/repo-types/:key", handlers.UpdateRepoType)
+	r.DELETE("/repo-types/:key", handlers.DeleteRepoType)
+	r.GET("/repos/:id/type-settings", handlers.GetRepoTypeSettings)
+	r.PUT("/repos/:id/type-settings", handlers.UpdateRepoTypeSettings)
 	r.GET("/repos/:id/path/external-devices", handlers.ListExternalRepoDevices)
 	r.GET("/repos/:id/path/options", handlers.ListRepoPathOptions)
 	r.PUT("/repos/:id/path", handlers.UpdateRepoPath)
@@ -85,6 +91,12 @@ func main() {
 	r.GET("/api/repos", handlers.GetRepos)
 	r.POST("/api/repos", handlers.CreateRepo)
 	r.PUT("/api/repos/:id", handlers.UpdateRepo)
+	r.GET("/api/repo-types", handlers.ListRepoTypes)
+	r.POST("/api/repo-types", handlers.CreateRepoType)
+	r.PUT("/api/repo-types/:key", handlers.UpdateRepoType)
+	r.DELETE("/api/repo-types/:key", handlers.DeleteRepoType)
+	r.GET("/api/repos/:id/type-settings", handlers.GetRepoTypeSettings)
+	r.PUT("/api/repos/:id/type-settings", handlers.UpdateRepoTypeSettings)
 	r.GET("/api/repos/:id/path/external-devices", handlers.ListExternalRepoDevices)
 	r.GET("/api/repos/:id/path/options", handlers.ListRepoPathOptions)
 	r.PUT("/api/repos/:id/path", handlers.UpdateRepoPath)
@@ -107,7 +119,6 @@ func main() {
 	r.GET("/api/isos/:id/file-status", handlers.CheckISOFileStatus)
 	r.GET("/api/rulebook/status", handlers.GetRuleBookStatus)
 	r.GET("/api/rulebooks", handlers.ListRuleBooks)
-	r.GET("/api/upgrade/migration-notice", handlers.GetLegacyBaseISOMigrationNotice)
 	r.GET("/api/open", handlers.HandleOpen)
 	r.POST("/api/open", handlers.HandleOpen)
 	r.GET("/api/debug/open-flow-logs", handlers.GetOpenFlowLogs)

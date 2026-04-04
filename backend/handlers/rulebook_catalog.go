@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"lazyiso/normalization"
+	"lazymanga/normalization"
 	"net/http"
 
 	"github.com/gin-gonic/gin"

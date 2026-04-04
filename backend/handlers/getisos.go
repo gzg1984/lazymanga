@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"lazyiso/models"
+	"lazymanga/models"
 	"net/http"
 	"os"
 	"strings"

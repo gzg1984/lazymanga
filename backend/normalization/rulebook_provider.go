@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"lazyiso/models"
-	"lazyiso/normalization/rulebook"
+	"lazymanga/models"
+	"lazymanga/normalization/rulebook"
 	"log"
 	"os"
 	"path/filepath"
@@ -94,7 +94,7 @@ func buildRuleBookPathCandidates(relPath string) []string {
 	cleanRel := filepath.Clean(relPath)
 	candidates := make([]string, 0, 3)
 
-	if envDir := strings.TrimSpace(os.Getenv("LAZYISO_RULEBOOK_DIR")); envDir != "" {
+	if envDir := strings.TrimSpace(os.Getenv("LAZYMANGA_RULEBOOK_DIR")); envDir != "" {
 		candidates = append(candidates, filepath.Join(envDir, filepath.Base(cleanRel)))
 	}
 
@@ -110,7 +110,7 @@ func buildRuleBookPathCandidates(relPath string) []string {
 func getRuleBookSearchGlob() string {
 	const relDir = "normalization/rules"
 
-	if envDir := strings.TrimSpace(os.Getenv("LAZYISO_RULEBOOK_DIR")); envDir != "" {
+	if envDir := strings.TrimSpace(os.Getenv("LAZYMANGA_RULEBOOK_DIR")); envDir != "" {
 		return filepath.Join(envDir, "*.json")
 	}
 

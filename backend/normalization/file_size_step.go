@@ -2,7 +2,7 @@ package normalization
 
 import (
 	"fmt"
-	"lazyiso/models"
+	"lazymanga/models"
 	"os"
 
 	"gorm.io/gorm"

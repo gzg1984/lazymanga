@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"lazyiso/models"
+	"lazymanga/models"
 	"net/http"
 	"time"
 

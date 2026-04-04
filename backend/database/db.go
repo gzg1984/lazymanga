@@ -3,7 +3,7 @@ package database
 import (
 	"log"
 
-	"lazyiso/models"
+	"lazymanga/models"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -26,12 +26,12 @@ func InitDB(dbPath string) *gorm.DB {
 			log.Printf("DropTable ISOs failed: %v", err)
 		}*/
 
-	log.Printf("InitDB: running AutoMigrate for tables=isos,repositories")
-	err = DB.AutoMigrate(&models.ISOs{}, &models.Repository{})
+	log.Printf("InitDB: running AutoMigrate for tables=isos,repositories,repo_type_defs")
+	err = DB.AutoMigrate(&models.ISOs{}, &models.Repository{}, &models.RepoTypeDef{})
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("InitDB: AutoMigrate finished for tables=isos,repositories")
+	log.Printf("InitDB: AutoMigrate finished for tables=isos,repositories,repo_type_defs")
 
 	return DB
 }

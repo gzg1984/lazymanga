@@ -1,29 +1,15 @@
 lzc-sdk-version: 0.1
-name: ISO管理器
-package: cloud.lazybird.app.lazyiso
-version: 0.1.0
-description: 
-license: https://choosealicense.com/licenses/mit/
-homepage: 
-author: Lazy Bird
-usage: "早起的鸟儿有虫吃。\nEarly bird has bugs.\nLazy Bird No Bug!\n"
+usage: |
+  早起的鸟儿有虫吃。
+  Early bird Gets bugs.
+  Lazy Bird GetsNo Bug!
 application:
   multi_instance: true
-  subdomain: lazyiso
+  subdomain: lazymanga
   routes:
     - /=file:///lzcapp/pkg/content/web
-    - /api/=exec://3000,/lzcapp/pkg/content/lazyiso --db /lzcapp/var/lazyiso.db
-  file_handler:
-    mime:
-      - application/x-cd-image
-    actions:
-      open: /open?file=%u
+    - >-
+      /api/=exec://3000,/lzcapp/pkg/content/lazymanga --db
+      /lzcapp/var/lazymanga.db
 ext_config:
   enable_media_access: true
-locales:
-  zh:
-    name: "ISO Manager"
-    description: "ISO Manager 用于批量管理和迁移 ISO 文件"
-  zh_CN:
-    name: "ISO Manager"
-    description: "ISO Manager 用于批量管理和迁移 ISO 文件"
