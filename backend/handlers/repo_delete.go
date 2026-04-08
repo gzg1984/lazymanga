@@ -50,10 +50,10 @@ func DeleteRepoISO(c *gin.Context) {
 	var row models.RepoISO
 	if err := repoDB.First(&row, isoID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "repo iso record not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "repository entry not found"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repository entry failed: " + err.Error()})
 		return
 	}
 	if !info.DeleteButton && !row.IsMissing {
@@ -77,17 +77,24 @@ func DeleteRepoISO(c *gin.Context) {
 			return
 		}
 
-		if _, err := os.Stat(absPath); err != nil {
-			if os.IsNotExist(err) {
+		info, statErr := os.Stat(absPath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
 				fileMissing = true
 			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "stat repo iso file failed: " + err.Error()})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "stat managed path failed: " + statErr.Error()})
 				return
 			}
 		} else {
 			fileExisted = true
-			if err := os.Remove(absPath); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "delete repo iso file failed: " + err.Error()})
+			var removeErr error
+			if row.IsDirectory || info.IsDir() {
+				removeErr = os.RemoveAll(absPath)
+			} else {
+				removeErr = os.Remove(absPath)
+			}
+			if removeErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "delete managed path failed: " + removeErr.Error()})
 				return
 			}
 			fileDeleted = true
@@ -95,12 +102,12 @@ func DeleteRepoISO(c *gin.Context) {
 	}
 
 	if err := repoDB.Delete(&models.RepoISO{}, row.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete repo iso record failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete repository entry failed: " + err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":        "repo iso deleted",
+		"message":        "repository entry deleted",
 		"repo_id":        repo.ID,
 		"iso_id":         row.ID,
 		"path":           row.Path,

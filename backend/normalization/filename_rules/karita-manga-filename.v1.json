@@ -1,0 +1,50 @@
+{
+  "name": "karita-manga-filename",
+  "version": "v1",
+  "rules": [
+    {
+      "id": "scanlator-circle-author-title",
+      "match_on": "current_name",
+      "pattern": "^【(?P<scanlator_group>[^】]+)】[（(](?P<event_code>[^）)]+)[）)]\\s*\\[(?P<circle_name>[^\\[(（\\]]+?)(?:\\s*[（(](?P<author_name>[^）)]+)[）)])?\\]\\s*(?P<title>.+?)(?:\\s*[（(](?P<original_work>[^）)]+)[）)])?$",
+      "defaults": {
+        "comic_market": "${event_code}",
+        "circle": "${circle_name}",
+        "author_alias": "${circle_name}"
+      }
+    },
+    {
+      "id": "scanlator-author-alias-title-noevent",
+      "match_on": "current_name",
+      "pattern": "^【(?P<scanlator_group>[^】]+)】\\s*\\[(?P<author_alias>[^\\[(（\\]]+?)(?:\\s*[（(](?P<author_name>[^）)]+)[）)])?\\]\\s*(?P<title>.+?)$",
+      "defaults": {}
+    },
+    {
+      "id": "parent-series-structured-child-title",
+      "match_on": "relative_path",
+      "pattern": "(?:^|.*/)【[^】]+】[（(][^）)]+[）)]\\s*\\[[^\\]]+\\]\\s*(?P<series_name>[^/]+?)\\s*[（(][^）)]+[）)]/【(?P<scanlator_group>[^】]+)】[（(](?P<event_code>[^）)]+)[）)]\\s*\\[(?P<circle_name>[^\\[(（]+?)(?:\\s*[（(](?P<author_name>[^）)]+)[）)])?\\]\\s*(?P<title>.+?)\\s*[（(](?P<original_work>[^）)]+)[）)]$",
+      "defaults": {
+        "comic_market": "${event_code}",
+        "circle": "${circle_name}",
+        "author_alias": "${circle_name}"
+      }
+    },
+    {
+      "id": "parent-series-child-title",
+      "match_on": "relative_path",
+      "pattern": "(?:^|.*/)【(?P<scanlator_group>[^】]+)】[（(](?P<event_code>[^）)]+)[）)]\\s*\\[(?P<circle_name>[^\\[(（]+?)(?:\\s*[（(](?P<author_name>[^）)]+)[）)])?\\]\\s*(?P<series_name>.+?)\\s*[（(](?P<original_work>[^）)]+)[）)]/(?:【[^】]+】)?(?P<title>[^/]+)$",
+      "defaults": {
+        "comic_market": "${event_code}",
+        "circle": "${circle_name}",
+        "author_alias": "${circle_name}"
+      }
+    },
+    {
+      "id": "legacy-circle-title-year-id",
+      "match_on": "current_name",
+      "pattern": "^\\[(?P<circle>[^\\]]+)\\]\\s*(?P<title>.+?)(?:\\s+[（(](?P<year>\\d{4})[）)])?(?:\\s+\\[(?P<karita_id>\\d+)\\])?$",
+      "defaults": {
+        "circle_name": "${circle}"
+      }
+    }
+  ]
+}

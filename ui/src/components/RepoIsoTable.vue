@@ -7,76 +7,134 @@
       style="width: 100%"
       border
     >
+      <el-table-column label="类型" width="120" align="center">
+        <template #default="scope">
+          <el-tag size="small" :type="elementTagType(scope.row)">{{ formatElementType(scope.row) }}</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="path" min-width="360">
         <template #header>
           <div class="type-filter-actions">
-            <el-button
-              size="small"
-              :type="activeTypeFilter === 'all' ? 'primary' : 'info'"
-              :plain="activeTypeFilter !== 'all'"
-              @click.stop="setTypeFilter('all')"
-            >
-              全部
-            </el-button>
-            <el-dropdown
-              v-if="showOSFilter"
-              class="os-filter-dropdown"
-              split-button
-              trigger="click"
-              size="small"
-              :type="activeTypeFilter === 'os' ? 'primary' : 'info'"
-              @click.stop="activateOSFilter"
-              @command="handleOSDistroCommand"
-            >
-              {{ osFilterButtonLabel }}
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item :command="OS_DISTRO_ALL_COMMAND">
-                    <div class="os-distro-option">
-                      <span>全部发行版 ({{ osTotalCount }})</span>
-                      <span class="os-distro-option-meta">
-                        <el-icon v-if="activeOSDistroFilter === ''"><Check /></el-icon>
-                      </span>
-                    </div>
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-for="option in osDistroOptions"
-                    :key="option.value"
-                    :command="option.value"
-                  >
-                    <div class="os-distro-option">
-                      <span>{{ option.label }}</span>
-                      <span class="os-distro-option-meta">
-                        <span class="os-distro-count">{{ option.count }}</span>
-                        <el-icon v-if="activeOSDistroFilter === option.value"><Check /></el-icon>
-                      </span>
-                    </div>
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <el-button
-              v-if="showEntertainmentFilter"
-              size="small"
-              :type="activeTypeFilter === 'entertainment' ? 'primary' : 'info'"
-              :plain="activeTypeFilter !== 'entertainment'"
-              @click.stop="setTypeFilter('entertainment')"
-            >
-              娱乐
-            </el-button>
-            <el-button
-              v-if="showOthersFilter"
-              size="small"
-              :type="activeTypeFilter === 'others' ? 'primary' : 'info'"
-              :plain="activeTypeFilter !== 'others'"
-              @click.stop="setTypeFilter('others')"
-            >
-              Others
-            </el-button>
+            <template v-if="showLegacyTypeFilters">
+              <el-button
+                size="small"
+                :type="activeTypeFilter === 'all' ? 'primary' : 'info'"
+                :plain="activeTypeFilter !== 'all'"
+                @click.stop="setTypeFilter('all')"
+              >
+                全部
+              </el-button>
+              <el-dropdown
+                v-if="showOSFilter"
+                class="os-filter-dropdown"
+                split-button
+                trigger="click"
+                size="small"
+                :type="activeTypeFilter === 'os' ? 'primary' : 'info'"
+                @click.stop="activateOSFilter"
+                @command="handleOSDistroCommand"
+              >
+                {{ osFilterButtonLabel }}
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item :command="OS_DISTRO_ALL_COMMAND">
+                      <div class="os-distro-option">
+                        <span>全部发行版 ({{ osTotalCount }})</span>
+                        <span class="os-distro-option-meta">
+                          <el-icon v-if="activeOSDistroFilter === ''"><Check /></el-icon>
+                        </span>
+                      </div>
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-for="option in osDistroOptions"
+                      :key="option.value"
+                      :command="option.value"
+                    >
+                      <div class="os-distro-option">
+                        <span>{{ option.label }}</span>
+                        <span class="os-distro-option-meta">
+                          <span class="os-distro-count">{{ option.count }}</span>
+                          <el-icon v-if="activeOSDistroFilter === option.value"><Check /></el-icon>
+                        </span>
+                      </div>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <el-button
+                v-if="showEntertainmentFilter"
+                size="small"
+                :type="activeTypeFilter === 'entertainment' ? 'primary' : 'info'"
+                :plain="activeTypeFilter !== 'entertainment'"
+                @click.stop="setTypeFilter('entertainment')"
+              >
+                娱乐
+              </el-button>
+              <el-button
+                v-if="showOthersFilter"
+                size="small"
+                :type="activeTypeFilter === 'others' ? 'primary' : 'info'"
+                :plain="activeTypeFilter !== 'others'"
+                @click.stop="setTypeFilter('others')"
+              >
+                Others
+              </el-button>
+            </template>
+
+            <div v-if="showMetadataFilter" class="metadata-filter-actions">
+              <el-select
+                :model-value="activeMetadataKeyFilter"
+                size="small"
+                clearable
+                filterable
+                class="metadata-filter-select"
+                placeholder="元数据字段"
+                @change="handleMetadataKeyChange"
+              >
+                <el-option
+                  v-for="option in metadataKeyOptions"
+                  :key="option.value"
+                  :label="`${option.label} (${option.count})`"
+                  :value="option.value"
+                />
+              </el-select>
+              <el-select
+                :model-value="activeMetadataValueFilter"
+                size="small"
+                clearable
+                filterable
+                class="metadata-filter-select metadata-filter-value-select"
+                :disabled="!activeMetadataKeyFilter"
+                placeholder="字段值"
+                @change="handleMetadataValueChange"
+              >
+                <el-option
+                  v-for="option in metadataValueOptions"
+                  :key="option.value"
+                  :label="`${option.label} (${option.count})`"
+                  :value="option.value"
+                />
+              </el-select>
+            </div>
           </div>
         </template>
         <template #default="scope">
-          <div v-if="isOSItem(scope.row)" :class="['os-path-cell', { 'path-missing': isRowMissing(scope.row) }]">
+          <div v-if="isDirectoryRow(scope.row)" :class="['others-path-cell', { 'path-missing': isRowMissing(scope.row) }]">
+            <span class="others-badge">目录</span>
+            <span class="others-full-path">{{ scope.row.path }}</span>
+            <div v-if="metadataPreviewEntries(scope.row).length" class="metadata-preview-row">
+              <el-tag
+                v-for="entry in metadataPreviewEntries(scope.row)"
+                :key="`${scope.row.id}-${entry.key}`"
+                size="small"
+                type="info"
+                effect="plain"
+              >
+                {{ entry.label }}：{{ entry.value }}
+              </el-tag>
+            </div>
+          </div>
+          <div v-else-if="isOSItem(scope.row)" :class="['os-path-cell', { 'path-missing': isRowMissing(scope.row) }]">
             <span class="os-badge">OS</span>
             <span class="os-file-name">{{ extractFileName(scope.row.path) }}</span>
           </div>
@@ -93,7 +151,7 @@
       </el-table-column>
       <el-table-column v-if="showMD5Column" label="MD5" min-width="280">
         <template #default="scope">
-          <span class="meta-text">{{ String(scope.row?.md5 || '').trim() || '待计算' }}</span>
+          <span class="meta-text">{{ isDirectoryRow(scope.row) ? '目录' : (String(scope.row?.md5 || '').trim() || '待计算') }}</span>
         </template>
       </el-table-column>
       <el-table-column v-if="showSizeColumn" label="大小" width="140" align="right">
@@ -105,7 +163,7 @@
         <template #default="scope">
           <div class="row-actions">
             <el-button
-              v-if="!isRowMissing(scope.row)"
+              v-if="!isRowMissing(scope.row) && !isDirectoryRow(scope.row)"
               size="small"
               type="primary"
               plain
@@ -148,7 +206,7 @@
       </el-table-column>
       <template #header>
         <div class="flex justify-between items-center w-full">
-          <span>仓库ISO列表</span>
+          <span>管理要素信息表</span>
           <span class="text-xs text-slate-600">共 {{ filteredRepoIsoList.length }} 条</span>
         </div>
       </template>
@@ -168,12 +226,12 @@
 
     <el-dialog
       v-model="singleMoveDialogVisible"
-      title="单个ISO迁移"
+      title="单个要素迁移"
       width="640px"
     >
       <div class="single-move-content">
         <div class="single-move-row"><span class="single-move-label">源仓库ID</span><span>{{ props.repoId }}</span></div>
-        <div class="single-move-row"><span class="single-move-label">ISO</span><span class="break-all">{{ singleMoveRecord?.path || '-' }}</span></div>
+        <div class="single-move-row"><span class="single-move-label">要素</span><span class="break-all">{{ singleMoveRecord?.path || '-' }}</span></div>
         <div class="single-move-row">
           <span class="single-move-label">目标仓库</span>
           <el-select
@@ -202,7 +260,7 @@
           :disabled="!canSubmitSingleMove"
           @click="submitSingleMove"
         >
-          迁移该 ISO
+          迁移该要素
         </el-button>
       </template>
     </el-dialog>
@@ -233,6 +291,9 @@ const repoIsoList = ref([])
 const loading = ref(false)
 const activeTypeFilter = ref('all')
 const activeOSDistroFilter = ref('')
+const activeMetadataKeyFilter = ref('')
+const activeMetadataValueFilter = ref('')
+const manualEditorMode = ref('legacy-type-editor')
 const manualEditVisible = ref(false)
 const activeIsoRecord = ref(null)
 const deleteButtonEnabled = ref(false)
@@ -267,6 +328,18 @@ const showOthersFilter = computed(() => {
   return repoIsoList.value.some((item) => isOtherItem(item))
 })
 
+const usesMetadataFilterOnly = computed(() => {
+  const mode = String(manualEditorMode.value || '').trim().toLowerCase()
+  return mode === 'metadata-editor' || mode === 'metadata'
+})
+
+const showLegacyTypeFilters = computed(() => {
+  if (usesMetadataFilterOnly.value) {
+    return false
+  }
+  return showOSFilter.value || showEntertainmentFilter.value || showOthersFilter.value
+})
+
 const osTotalCount = computed(() => {
   return repoIsoList.value.filter((item) => isOSItem(item)).length
 })
@@ -291,6 +364,49 @@ const osFilterButtonLabel = computed(() => {
   return activeOSDistroFilter.value || 'OS'
 })
 
+const metadataKeyOptions = computed(() => {
+  const counter = new Map()
+  for (const item of repoIsoList.value) {
+    const metadata = extractRowMetadata(item)
+    for (const [key, value] of Object.entries(metadata)) {
+      const normalizedValue = normalizeMetadataValue(value)
+      if (!shouldExposeMetadataField(key, normalizedValue)) {
+        continue
+      }
+      counter.set(key, (counter.get(key) || 0) + 1)
+    }
+  }
+
+  return Array.from(counter.entries())
+    .map(([value, count]) => ({ value, label: metadataFieldLabel(value), count }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN', { sensitivity: 'base' }))
+})
+
+const metadataValueOptions = computed(() => {
+  const selectedKey = String(activeMetadataKeyFilter.value || '').trim()
+  if (!selectedKey) {
+    return []
+  }
+
+  const counter = new Map()
+  for (const item of repoIsoList.value) {
+    const metadata = extractRowMetadata(item)
+    const normalizedValue = normalizeMetadataValue(metadata[selectedKey])
+    if (!normalizedValue) {
+      continue
+    }
+    counter.set(normalizedValue, (counter.get(normalizedValue) || 0) + 1)
+  }
+
+  return Array.from(counter.entries())
+    .map(([value, count]) => ({ value, label: value, count }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN', { sensitivity: 'base' }))
+})
+
+const showMetadataFilter = computed(() => {
+  return metadataKeyOptions.value.length > 0
+})
+
 const singleMoveTargetOptions = computed(() => {
   return singleMoveTargetRepos.value.filter((repo) => Number(repo.id) !== Number(props.repoId))
 })
@@ -300,12 +416,10 @@ const canSubmitSingleMove = computed(() => {
 })
 
 const filteredRepoIsoList = computed(() => {
-  if (activeTypeFilter.value === 'all') {
-    return repoIsoList.value
-  }
+  let items = repoIsoList.value
 
   if (activeTypeFilter.value === 'os') {
-    return repoIsoList.value.filter((item) => {
+    items = items.filter((item) => {
       if (!isOSItem(item)) {
         return false
       }
@@ -314,21 +428,119 @@ const filteredRepoIsoList = computed(() => {
       }
       return extractOSDistro(item) === activeOSDistroFilter.value
     })
+  } else if (activeTypeFilter.value === 'entertainment') {
+    items = items.filter((item) => isEntertainmentItem(item))
+  } else if (activeTypeFilter.value === 'others') {
+    items = items.filter((item) => isOtherItem(item))
   }
 
-  if (activeTypeFilter.value === 'entertainment') {
-    return repoIsoList.value.filter((item) => isEntertainmentItem(item))
+  if (activeMetadataKeyFilter.value) {
+    items = items.filter((item) => {
+      const metadata = extractRowMetadata(item)
+      const normalizedValue = normalizeMetadataValue(metadata[activeMetadataKeyFilter.value])
+      if (!normalizedValue) {
+        return false
+      }
+      if (!activeMetadataValueFilter.value) {
+        return true
+      }
+      return normalizedValue === activeMetadataValueFilter.value
+    })
   }
 
-  if (activeTypeFilter.value === 'others') {
-    return repoIsoList.value.filter((item) => isOtherItem(item))
-  }
-
-  return repoIsoList.value
+  return items
 })
 
 function normalizePath(path) {
   return String(path || '').replace(/\\/g, '/').trim()
+}
+
+function normalizeMetadataValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean).join(' / ')
+  }
+  if (value === null || value === undefined) {
+    return ''
+  }
+  if (typeof value === 'object') {
+    return ''
+  }
+  return String(value).trim()
+}
+
+function shouldExposeMetadataField(key, normalizedValue) {
+  const normalizedKey = String(key || '').trim()
+  if (!normalizedKey || normalizedKey.startsWith('_')) {
+    return false
+  }
+  if (normalizedKey === 'path_parts' || normalizedKey === 'source_path' || normalizedKey === 'original_name') {
+    return false
+  }
+  return !!normalizedValue
+}
+
+function metadataFieldLabel(key) {
+  const mapping = {
+    title: '标题',
+    series_name: '系列名字',
+    scanlator_group: '汉化组',
+    author_name: '作者',
+    author_alias: '作者别名',
+    original_work: '原作',
+    comic_market: 'Comic Market',
+    event_code: '活动编号',
+    circle: '社团',
+    circle_name: '社团名',
+    year: '年份',
+    karita_id: 'Karita ID',
+    source_path: '来源路径',
+    original_name: '原始名称'
+  }
+  return mapping[key] || key
+}
+
+function extractRowMetadata(item) {
+  if (item?.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)) {
+    return item.metadata
+  }
+
+  const raw = String(item?.metadata_json || item?.metadataJson || '').trim()
+  if (!raw || raw === '{}') {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed
+    }
+  } catch (_) {
+    // ignore invalid metadata json
+  }
+  return {}
+}
+
+function metadataPreviewEntries(item) {
+  const metadata = extractRowMetadata(item)
+  const preferredKeys = ['series_name', 'scanlator_group', 'author_name', 'author_alias', 'original_work']
+  const entries = []
+
+  for (const key of preferredKeys) {
+    const value = normalizeMetadataValue(metadata[key])
+    if (!value) {
+      continue
+    }
+    entries.push({ key, label: metadataFieldLabel(key), value })
+    if (entries.length >= 4) {
+      break
+    }
+  }
+
+  return entries
+}
+
+function isDirectoryRow(item) {
+  return !!(item?.is_directory ?? item?.isDirectory)
 }
 
 function isOSItem(item) {
@@ -388,8 +600,39 @@ function extractFileName(path) {
   return parts[parts.length - 1] || normalized
 }
 
+function extractElementSuffix(item) {
+  if (isDirectoryRow(item)) return ''
+  const name = String(item?.filename || item?.fileName || extractFileName(item?.path || '') || '').trim()
+  const match = name.match(/(\.[a-z0-9]{1,12})$/i)
+  return match ? match[1].toLowerCase() : ''
+}
+
+function formatElementType(item) {
+  if (isDirectoryRow(item)) return '目录'
+  const suffix = extractElementSuffix(item)
+  if (suffix) return `${suffix} 文件`
+  return '文件'
+}
+
+function elementTagType(item) {
+  if (isDirectoryRow(item)) return 'success'
+  const suffix = extractElementSuffix(item)
+  if (suffix === '.iso') return 'warning'
+  if (suffix) return 'primary'
+  return 'info'
+}
+
 function setTypeFilter(type) {
   activeTypeFilter.value = type
+}
+
+function handleMetadataKeyChange(value) {
+  activeMetadataKeyFilter.value = String(value || '').trim()
+  activeMetadataValueFilter.value = ''
+}
+
+function handleMetadataValueChange(value) {
+  activeMetadataValueFilter.value = String(value || '').trim()
 }
 
 function activateOSFilter() {
@@ -458,7 +701,7 @@ async function submitSingleMove() {
       body: JSON.stringify({ target_repo_id: Number(singleMoveTargetRepoId.value) })
     })
     if (!res.ok) {
-      throw new Error(await parseErrorMessage(res, '单个ISO迁移失败'))
+      throw new Error(await parseErrorMessage(res, '单个要素迁移失败'))
     }
 
     const data = await res.json()
@@ -466,9 +709,9 @@ async function submitSingleMove() {
     emitter.emit('refresh-repo', { repoId: props.repoId })
     emitter.emit('refresh-repo', { repoId: Number(singleMoveTargetRepoId.value) })
     emitter.emit('refresh-all')
-    ElMessage.success(data?.message || '单个ISO迁移成功')
+    ElMessage.success(data?.message || '单个要素迁移成功')
   } catch (e) {
-    ElMessage.error(e.message || '单个ISO迁移失败')
+    ElMessage.error(e.message || '单个要素迁移失败')
   } finally {
     singleMoveSubmitting.value = false
   }
@@ -511,6 +754,11 @@ function formatSize(v) {
 }
 
 function ensureActiveTypeFilterValid() {
+  if (!showLegacyTypeFilters.value) {
+    activeOSDistroFilter.value = ''
+    activeTypeFilter.value = 'all'
+  }
+
   if (activeTypeFilter.value === 'os' && !showOSFilter.value) {
     activeOSDistroFilter.value = ''
     activeTypeFilter.value = 'all'
@@ -530,6 +778,22 @@ function ensureActiveTypeFilterValid() {
   }
   if (activeTypeFilter.value === 'others' && !showOthersFilter.value) {
     activeTypeFilter.value = 'all'
+  }
+
+  if (activeMetadataKeyFilter.value) {
+    const keyExists = metadataKeyOptions.value.some((option) => option.value === activeMetadataKeyFilter.value)
+    if (!keyExists) {
+      activeMetadataKeyFilter.value = ''
+      activeMetadataValueFilter.value = ''
+      return
+    }
+  }
+
+  if (activeMetadataValueFilter.value) {
+    const valueExists = metadataValueOptions.value.some((option) => option.value === activeMetadataValueFilter.value)
+    if (!valueExists) {
+      activeMetadataValueFilter.value = ''
+    }
   }
 }
 
@@ -628,12 +892,17 @@ function getRowDownloadHint(row) {
 
 async function handleDownload(row) {
   if (!row?.id) {
-    ElMessage.error('未获取到ISO记录ID，无法下载')
+    ElMessage.error('未获取到要素记录ID，无法下载')
+    return
+  }
+
+  if (isDirectoryRow(row)) {
+    ElMessage.error('目录条目不支持单文件下载')
     return
   }
 
   if (isRowMissing(row)) {
-    ElMessage.error('当前ISO文件已失踪，无法下载')
+    ElMessage.error('当前文件已失踪，无法下载')
     return
   }
 
@@ -649,7 +918,7 @@ async function handleDownload(row) {
     const refreshData = await refreshRes.json()
     if (!refreshData?.exists) {
       emitter.emit('refresh-repo', { repoId: props.repoId })
-      ElMessage.error('当前ISO文件已失踪，无法下载')
+      ElMessage.error('当前文件已失踪，无法下载')
       return
     }
   } catch (e) {
@@ -658,7 +927,7 @@ async function handleDownload(row) {
   }
 
   try {
-    const fallbackFileName = row.filename || extractFileName(row.path) || 'download.iso'
+    const fallbackFileName = row.filename || extractFileName(row.path) || 'download.bin'
     const result = await startManagedDownload({
       sourceKey: buildRowDownloadSourceKey(row),
       sourceLabel: `仓库 #${props.repoId}`,
@@ -692,7 +961,7 @@ async function fetchRepoIsos() {
   try {
     const res = await fetch(`/api/repos/${props.repoId}/repoisos`)
     if (!res.ok) {
-      throw new Error(await parseErrorMessage(res, '获取仓库ISO列表失败'))
+      throw new Error(await parseErrorMessage(res, '获取管理要素信息表失败'))
     }
 
     const data = await res.json()
@@ -709,7 +978,9 @@ async function fetchRepoIsos() {
     repoIsoList.value = []
     activeTypeFilter.value = 'all'
     activeOSDistroFilter.value = ''
-    ElMessage.error(e.message || '获取仓库ISO列表失败')
+    activeMetadataKeyFilter.value = ''
+    activeMetadataValueFilter.value = ''
+    ElMessage.error(e.message || '获取管理要素信息表失败')
   } finally {
     if (requestSeq === fetchRepoIsosRequestSeq.value) {
       loading.value = false
@@ -723,6 +994,7 @@ async function fetchRepoInfo() {
     showMD5Column.value = false
     showSizeColumn.value = false
     singleMoveEnabled.value = false
+    manualEditorMode.value = 'legacy-type-editor'
     return
   }
 
@@ -741,6 +1013,8 @@ async function fetchRepoInfo() {
     showMD5Column.value = !!data?.show_md5
     showSizeColumn.value = !!data?.show_size
     singleMoveEnabled.value = !!data?.single_move
+    manualEditorMode.value = String(data?.manual_editor_mode || data?.manualEditorMode || 'legacy-type-editor')
+    ensureActiveTypeFilterValid()
   } catch (e) {
     console.error('[RepoIsoTable] fetchRepoInfo failed', e)
     if (requestSeq !== fetchRepoInfoRequestSeq.value) {
@@ -750,6 +1024,7 @@ async function fetchRepoInfo() {
     showMD5Column.value = false
     showSizeColumn.value = false
     singleMoveEnabled.value = false
+    manualEditorMode.value = 'legacy-type-editor'
   }
 }
 
@@ -778,10 +1053,13 @@ watch(
     repoIsoList.value = []
     activeTypeFilter.value = 'all'
     activeOSDistroFilter.value = ''
+    activeMetadataKeyFilter.value = ''
+    activeMetadataValueFilter.value = ''
     deleteButtonEnabled.value = false
     showMD5Column.value = false
     showSizeColumn.value = false
     singleMoveEnabled.value = false
+    manualEditorMode.value = 'legacy-type-editor'
 
     if (Number(deferredRepoId.value) === Number(props.repoId)) {
       scheduleInitialRefresh(500)
@@ -836,6 +1114,21 @@ watch(
   flex-wrap: wrap;
 }
 
+.metadata-filter-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.metadata-filter-select {
+  width: 150px;
+}
+
+.metadata-filter-value-select {
+  width: 210px;
+}
+
 .row-actions {
   display: inline-flex;
   align-items: center;
@@ -864,6 +1157,13 @@ watch(
 .path-missing {
   color: #b91c1c;
   text-decoration: line-through;
+}
+
+.metadata-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .single-move-content {

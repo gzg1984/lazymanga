@@ -3,9 +3,12 @@ package handlers
 import (
 	"fmt"
 	"lazymanga/models"
+	"lazymanga/normalization"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 const maxMergeFailureMessages = 30
@@ -24,6 +27,9 @@ type RepoMergeFlowResult struct {
 	SkippedSourceMissing    int      `json:"skipped_source_missing"`
 	Failed                  int      `json:"failed"`
 	SourceRemaining         int64    `json:"source_remaining"`
+	TargetAutoNormalize     bool     `json:"target_auto_normalize"`
+	TargetNormalizeAsync    bool     `json:"target_normalize_async"`
+	TargetNormalizeRowCount int      `json:"target_normalize_row_count"`
 	Failures                []string `json:"failures,omitempty"`
 }
 
@@ -75,9 +81,14 @@ func ExecuteRepoMergeFlowWithProgress(sourceRepo models.Repository, targetRepo m
 	if err != nil {
 		return result, fmt.Errorf("open target repo db failed: %w", err)
 	}
+	targetInfo, err := EnsureRepoInfoFromRepository(targetDB, targetRepo)
+	if err != nil {
+		return result, fmt.Errorf("load target repo info failed: %w", err)
+	}
 
 	result.SourceRootPath = sourceRootAbs
 	result.TargetRootPath = targetRootAbs
+	result.TargetAutoNormalize = targetInfo.AutoNormalize
 
 	var sourceRows []models.RepoISO
 	if err := sourceDB.Order("id asc").Find(&sourceRows).Error; err != nil {
@@ -94,6 +105,7 @@ func ExecuteRepoMergeFlowWithProgress(sourceRepo models.Repository, targetRepo m
 	for _, row := range targetRows {
 		targetPathSet[row.Path] = struct{}{}
 	}
+	movedTargetRows := make([]models.RepoISO, 0, len(sourceRows))
 
 	for _, sourceRow := range sourceRows {
 		relPath := strings.TrimSpace(sourceRow.Path)
@@ -136,11 +148,6 @@ func ExecuteRepoMergeFlowWithProgress(sourceRepo models.Repository, targetRepo m
 			result.Failed++
 			appendMergeFailure(&result, fmt.Sprintf("stat source failed id=%d path=%q error=%v", sourceRow.ID, relPath, err))
 			markRecordDone("failed-stat-source", relPath)
-			continue
-		}
-		if sourceInfo.IsDir() {
-			result.SkippedSourceMissing++
-			markRecordDone("skipped-source-is-dir", relPath)
 			continue
 		}
 
@@ -189,35 +196,39 @@ func ExecuteRepoMergeFlowWithProgress(sourceRepo models.Repository, targetRepo m
 
 		report("moving-file", relPath)
 
-		if err := moveRepoISOFileWithFallback(sourceAbs, targetAbs); err != nil {
+		if err := moveRepoISOPathWithFallback(sourceAbs, targetAbs); err != nil {
 			tx.Rollback()
 			result.Failed++
-			appendMergeFailure(&result, fmt.Sprintf("move source file failed source_id=%d path=%q error=%v", sourceRow.ID, relPath, err))
-			markRecordDone("failed-move-file", relPath)
+			appendMergeFailure(&result, fmt.Sprintf("move source path failed source_id=%d path=%q error=%v", sourceRow.ID, relPath, err))
+			markRecordDone("failed-move-path", relPath)
 			continue
 		}
 
-		// Guarantee source file is removed even if underlying filesystem behavior is unusual.
+		// Guarantee source path is removed even if underlying filesystem behavior is unusual.
 		if _, err := os.Stat(sourceAbs); err == nil {
-			if err := os.Remove(sourceAbs); err != nil {
-				_ = moveRepoISOFileWithFallback(targetAbs, sourceAbs)
+			removeFn := os.Remove
+			if sourceInfo.IsDir() {
+				removeFn = os.RemoveAll
+			}
+			if err := removeFn(sourceAbs); err != nil {
+				_ = moveRepoISOPathWithFallback(targetAbs, sourceAbs)
 				tx.Rollback()
 				result.Failed++
-				appendMergeFailure(&result, fmt.Sprintf("delete source file failed source_id=%d path=%q error=%v", sourceRow.ID, relPath, err))
-				markRecordDone("failed-delete-source-file", relPath)
+				appendMergeFailure(&result, fmt.Sprintf("delete source path failed source_id=%d path=%q error=%v", sourceRow.ID, relPath, err))
+				markRecordDone("failed-delete-source-path", relPath)
 				continue
 			}
 		} else if err != nil && !os.IsNotExist(err) {
-			_ = moveRepoISOFileWithFallback(targetAbs, sourceAbs)
+			_ = moveRepoISOPathWithFallback(targetAbs, sourceAbs)
 			tx.Rollback()
 			result.Failed++
-			appendMergeFailure(&result, fmt.Sprintf("recheck source file failed source_id=%d path=%q error=%v", sourceRow.ID, relPath, err))
-			markRecordDone("failed-recheck-source-file", relPath)
+			appendMergeFailure(&result, fmt.Sprintf("recheck source path failed source_id=%d path=%q error=%v", sourceRow.ID, relPath, err))
+			markRecordDone("failed-recheck-source-path", relPath)
 			continue
 		}
 
 		if err := tx.Commit().Error; err != nil {
-			_ = moveRepoISOFileWithFallback(targetAbs, sourceAbs)
+			_ = moveRepoISOPathWithFallback(targetAbs, sourceAbs)
 			result.Failed++
 			appendMergeFailure(&result, fmt.Sprintf("commit target transaction failed source_id=%d path=%q error=%v", sourceRow.ID, relPath, err))
 			markRecordDone("failed-commit-target-tx", relPath)
@@ -234,8 +245,14 @@ func ExecuteRepoMergeFlowWithProgress(sourceRepo models.Repository, targetRepo m
 		}
 
 		targetPathSet[relPath] = struct{}{}
+		movedTargetRows = append(movedTargetRows, targetRow)
 		result.Merged++
 		markRecordDone("merged", relPath)
+	}
+
+	result.TargetNormalizeAsync, result.TargetNormalizeRowCount = triggerTransferAutoNormalize(targetRepo, targetDB, targetRootAbs, targetInfo.AutoNormalize, movedTargetRows)
+	if result.TargetNormalizeAsync {
+		report("triggered-auto-normalize", "")
 	}
 
 	if err := sourceDB.Model(&models.RepoISO{}).Count(&result.SourceRemaining).Error; err != nil {
@@ -244,6 +261,60 @@ func ExecuteRepoMergeFlowWithProgress(sourceRepo models.Repository, targetRepo m
 	report("done", "")
 
 	return result, nil
+}
+
+func collectTransferNormalizationRows(targetAutoNormalize bool, movedRows []models.RepoISO) []models.RepoISO {
+	if !targetAutoNormalize || len(movedRows) == 0 {
+		return nil
+	}
+
+	queued := make([]models.RepoISO, 0, len(movedRows))
+	for _, row := range movedRows {
+		if strings.TrimSpace(row.Path) == "" {
+			continue
+		}
+		queued = append(queued, row)
+	}
+	return queued
+}
+
+func collectTransferNormalizeScopes(targetAutoNormalize bool, movedRows []models.RepoISO) []string {
+	if !targetAutoNormalize || len(movedRows) == 0 {
+		return nil
+	}
+
+	scopes := make([]string, 0, len(movedRows))
+	seen := make(map[string]struct{}, len(movedRows))
+	for _, row := range movedRows {
+		if !row.IsDirectory {
+			continue
+		}
+		scope := strings.Trim(strings.ReplaceAll(row.Path, "\\", "/"), "/")
+		if scope == "" {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		scopes = append(scopes, scope)
+	}
+	return scopes
+}
+
+func triggerTransferAutoNormalize(targetRepo models.Repository, targetDB *gorm.DB, targetRootAbs string, targetAutoNormalize bool, movedRows []models.RepoISO) (bool, int) {
+	queued := collectTransferNormalizationRows(targetAutoNormalize, movedRows)
+	scopes := collectTransferNormalizeScopes(targetAutoNormalize, movedRows)
+	if len(queued) == 0 && len(scopes) == 0 {
+		return false, 0
+	}
+	if len(queued) > 0 {
+		normalization.StartAsyncPostIndexNormalization(targetRepo.ID, targetDB, targetRootAbs, queued)
+	}
+	for _, scope := range scopes {
+		triggerRepoIncrementalNormalize(targetRepo, "transfer-auto-normalize", scope)
+	}
+	return true, len(queued)
 }
 
 func appendMergeFailure(result *RepoMergeFlowResult, message string) {

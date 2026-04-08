@@ -4,7 +4,9 @@ import (
 	"flag"
 	"lazymanga/database"
 	"lazymanga/handlers"
+	"lazymanga/normalization"
 	"log"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 )
@@ -15,6 +17,7 @@ func main() {
 	flag.Parse()
 
 	db := database.InitDB(*dbPath)
+	normalization.SetRuleBookUserDir(filepath.Join(filepath.Dir(*dbPath), "rulebooks"))
 
 	handlers.SetDB(db)
 	if err := handlers.EnsureDefaultRepoTypes(); err != nil {
@@ -51,6 +54,9 @@ func main() {
 	r.GET("/isos/:id/file-status", handlers.CheckISOFileStatus)
 	r.GET("/rulebook/status", handlers.GetRuleBookStatus)
 	r.GET("/rulebooks", handlers.ListRuleBooks)
+	r.POST("/rulebooks", handlers.CreateRuleBook)
+	r.GET("/rulebooks/content", handlers.GetRuleBookContent)
+	r.PUT("/rulebooks/content", handlers.UpdateRuleBookContent)
 	//r.GET("/reboot", handlers.Reboot)
 	r.POST("/addiso", handlers.CreateISOs)
 	r.GET("/open", handlers.HandleOpen)
@@ -119,6 +125,9 @@ func main() {
 	r.GET("/api/isos/:id/file-status", handlers.CheckISOFileStatus)
 	r.GET("/api/rulebook/status", handlers.GetRuleBookStatus)
 	r.GET("/api/rulebooks", handlers.ListRuleBooks)
+	r.POST("/api/rulebooks", handlers.CreateRuleBook)
+	r.GET("/api/rulebooks/content", handlers.GetRuleBookContent)
+	r.PUT("/api/rulebooks/content", handlers.UpdateRuleBookContent)
 	r.GET("/api/open", handlers.HandleOpen)
 	r.POST("/api/open", handlers.HandleOpen)
 	r.GET("/api/debug/open-flow-logs", handlers.GetOpenFlowLogs)

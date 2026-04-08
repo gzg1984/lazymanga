@@ -20,7 +20,7 @@
           <label class="field-label">绑定模板</label>
           <div>
             <el-select v-model="typeForm.repoTypeKey" class="w-full" :disabled="isBusy" placeholder="请选择仓库类型模板">
-              <el-option v-for="item in repoTypeOptions" :key="item.key" :label="`${item.name} (${item.key})`" :value="item.key">
+              <el-option v-for="item in selectableRepoTypeOptions" :key="item.key" :label="`${item.name} (${item.key})`" :value="item.key">
                 <div class="type-option-row">
                   <span>{{ item.name }}</span>
                   <span class="type-option-key">{{ item.key }}</span>
@@ -63,12 +63,20 @@
             <el-checkbox v-model="typeForm.customizeSingleMove" :disabled="isBusy">自定义“单条移动”</el-checkbox>
             <el-switch v-model="typeForm.singleMove" :disabled="isBusy || !typeForm.customizeSingleMove" inline-prompt active-text="开" inactive-text="关" />
           </div>
+          <div class="overlay-row">
+            <el-checkbox v-model="typeForm.customizeManualEditorMode" :disabled="isBusy">自定义“手动编辑器”</el-checkbox>
+            <el-select v-model="typeForm.manualEditorMode" class="manual-editor-mode-select" :disabled="isBusy || !typeForm.customizeManualEditorMode">
+              <el-option label="元数据编辑" value="metadata-editor" />
+              <el-option label="旧版类型编辑" value="legacy-type-editor" />
+            </el-select>
+          </div>
           <div class="overlay-row rulebook-overlay-row">
             <el-checkbox v-model="typeForm.customizeRulebook" :disabled="isBusy">自定义 RuleBook</el-checkbox>
-            <div class="rulebook-inputs">
-              <el-input v-model="typeForm.rulebookName" :disabled="isBusy || !typeForm.customizeRulebook" placeholder="rulebook_name" />
-              <el-input v-model="typeForm.rulebookVersion" :disabled="isBusy || !typeForm.customizeRulebook" placeholder="v1" />
-            </div>
+            <RuleBookSelector
+              v-model:name="typeForm.rulebookName"
+              v-model:version="typeForm.rulebookVersion"
+              :disabled="isBusy || !typeForm.customizeRulebook"
+            />
           </div>
         </div>
 
@@ -91,6 +99,8 @@
             <span>{{ previewSettings.showSize ? '是' : '否' }}</span>
             <span>单条移动</span>
             <span>{{ previewSettings.singleMove ? '是' : '否' }}</span>
+            <span>手动编辑器</span>
+            <span>{{ previewSettings.manualEditorMode === 'metadata-editor' ? '元数据编辑' : '旧版类型编辑' }}</span>
             <span>RuleBook</span>
             <span>{{ previewSettings.ruleBookName || '-' }} @ {{ previewSettings.ruleBookVersion || '-' }}</span>
           </div>
@@ -119,6 +129,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import emitter from '../eventBus'
+import RuleBookSelector from './RuleBookSelector.vue'
 
 const props = defineProps({
   repoId: {
@@ -148,6 +159,10 @@ const deleteButtonText = computed(() => (isBasicRepo.value ? '不能删除基础
 const selectedRepoTypeOption = computed(() => {
   return repoTypeOptions.value.find((item) => item.key === typeForm.repoTypeKey) || null
 })
+const selectableRepoTypeOptions = computed(() => {
+  const selectedKey = String(typeForm.repoTypeKey || '').trim()
+  return repoTypeOptions.value.filter((item) => item.enabled !== false || item.key === selectedKey)
+})
 const selectedRepoTypeDescription = computed(() => {
   return String(selectedRepoTypeOption.value?.description || '').trim()
 })
@@ -161,6 +176,7 @@ const previewSettings = computed(() => {
         showMD5: !!selectedRepoTypeOption.value.show_md5,
         showSize: !!selectedRepoTypeOption.value.show_size,
         singleMove: !!selectedRepoTypeOption.value.single_move,
+        manualEditorMode: selectedRepoTypeOption.value.manual_editor_mode || 'legacy-type-editor',
         ruleBookName: selectedRepoTypeOption.value.rulebook_name || 'noop',
         ruleBookVersion: selectedRepoTypeOption.value.rulebook_version || 'v1'
       }
@@ -173,6 +189,7 @@ const previewSettings = computed(() => {
   if (typeForm.customizeShowMD5) base.showMD5 = !!typeForm.showMD5
   if (typeForm.customizeShowSize) base.showSize = !!typeForm.showSize
   if (typeForm.customizeSingleMove) base.singleMove = !!typeForm.singleMove
+  if (typeForm.customizeManualEditorMode) base.manualEditorMode = String(typeForm.manualEditorMode || '').trim() || 'legacy-type-editor'
   if (typeForm.customizeRulebook) {
     base.ruleBookName = String(typeForm.rulebookName || '').trim() || 'noop'
     base.ruleBookVersion = String(typeForm.rulebookVersion || '').trim() || 'v1'
@@ -203,6 +220,8 @@ function createTypeForm() {
     showSize: true,
     customizeSingleMove: false,
     singleMove: true,
+    customizeManualEditorMode: false,
+    manualEditorMode: 'legacy-type-editor',
     customizeRulebook: false,
     rulebookName: 'noop',
     rulebookVersion: 'v1'
@@ -218,6 +237,7 @@ function defaultEffectiveSettings() {
     showMD5: true,
     showSize: true,
     singleMove: true,
+    manualEditorMode: 'legacy-type-editor',
     ruleBookName: 'noop',
     ruleBookVersion: 'v1'
   }
@@ -232,6 +252,7 @@ function buildSettingsOverridePayload() {
   if (typeForm.customizeShowMD5) payload.show_md5 = !!typeForm.showMD5
   if (typeForm.customizeShowSize) payload.show_size = !!typeForm.showSize
   if (typeForm.customizeSingleMove) payload.single_move = !!typeForm.singleMove
+  if (typeForm.customizeManualEditorMode) payload.manual_editor_mode = String(typeForm.manualEditorMode || '').trim() || 'legacy-type-editor'
   if (typeForm.customizeRulebook) {
     payload.rulebook_name = String(typeForm.rulebookName || '').trim() || 'noop'
     payload.rulebook_version = String(typeForm.rulebookVersion || '').trim() || 'v1'
@@ -254,6 +275,7 @@ function restoreTemplateInheritance() {
   typeForm.customizeShowMD5 = false
   typeForm.customizeShowSize = false
   typeForm.customizeSingleMove = false
+  typeForm.customizeManualEditorMode = false
   typeForm.customizeRulebook = false
 }
 
@@ -284,6 +306,9 @@ function applyTypeSettingsPayload(payload) {
   typeForm.customizeSingleMove = typeof override?.single_move === 'boolean'
   typeForm.singleMove = typeForm.customizeSingleMove ? !!override.single_move : !!effective.single_move
 
+  typeForm.customizeManualEditorMode = typeof override?.manual_editor_mode === 'string'
+  typeForm.manualEditorMode = typeForm.customizeManualEditorMode ? String(override.manual_editor_mode || 'legacy-type-editor') : String(effective?.manual_editor_mode || 'legacy-type-editor')
+
   typeForm.customizeRulebook = typeof override?.rulebook_name === 'string' || typeof override?.rulebook_version === 'string'
   typeForm.rulebookName = String(override?.rulebook_name || effective?.rulebook_name || 'noop')
   typeForm.rulebookVersion = String(override?.rulebook_version || effective?.rulebook_version || 'v1')
@@ -296,6 +321,7 @@ function applyTypeSettingsPayload(payload) {
     showMD5: !!effective.show_md5,
     showSize: !!effective.show_size,
     singleMove: !!effective.single_move,
+    manualEditorMode: effective?.manual_editor_mode || 'legacy-type-editor',
     ruleBookName: effective?.rulebook_name || 'noop',
     ruleBookVersion: effective?.rulebook_version || 'v1'
   }
@@ -477,7 +503,7 @@ async function deleteRepo() {
     return
   }
 
-  const ok = window.confirm('确认删除这个仓库记录吗？不会删除任何实际镜像文件。')
+  const ok = window.confirm('确认删除这个仓库记录吗？不会删除任何实际元素文件。')
   if (!ok) return
 
   deleting.value = true

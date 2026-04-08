@@ -1,0 +1,39 @@
+{
+  "name": "karita-manga",
+  "version": "v1",
+  "scan": {
+    "extensions": [".cbz", ".cbr", ".zip", ".rar", ".7z", ".pdf"],
+    "directory_rules": [
+      {
+        "name": "karita-folder",
+        "extensions": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"],
+        "min_file_count": 5,
+        "transform": {
+          "pattern": "^\\[(?P<circle>[^\\]]+)\\]\\s*(?P<title>.+?)(?:\\s+\\((?P<year>\\d{4})\\))?(?:\\s+\\[(?P<karita_id>\\d+)\\])?$",
+          "recognizer_name": "karita-manga-filename",
+          "recognizer_version": "v1",
+          "rename_template": "${title}",
+          "target_path_template": "${title}",
+          "metadata_file": ".karita.meta.json",
+          "metadata": {
+            "title": "${title}",
+            "series_name": "${series_name}",
+            "circle": "${circle}",
+            "circle_name": "${circle_name}",
+            "scanlator_group": "${scanlator_group}",
+            "event_code": "${event_code}",
+            "comic_market": "${comic_market}",
+            "author_name": "${author_name}",
+            "author_alias": "${author_alias}",
+            "original_work": "${original_work}",
+            "year": "${year}",
+            "karita_id": "${karita_id}",
+            "source_path": "${path}",
+            "original_name": "${original_name}"
+          }
+        }
+      }
+    ]
+  },
+  "rules": []
+}

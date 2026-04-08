@@ -95,7 +95,13 @@
       <template #footer>
         <div class="merge-dialog-footer">
           <el-button :disabled="submitting" @click="closeDialog">关闭</el-button>
-          <el-button type="danger" :loading="submitting" :disabled="!canSubmit" @click="submitMergeRequest">
+          <el-button
+            v-if="!mergeTaskCompleted"
+            type="danger"
+            :loading="submitting"
+            :disabled="!canSubmit"
+            @click="submitMergeRequest"
+          >
             {{ mergeButtonLabel }}
           </el-button>
         </div>
@@ -138,6 +144,7 @@ const sourceTotalBytes = computed(() => Number(sourceSummary.value?.total_size_b
 const sourceHasIncompleteSize = computed(() => !!sourceSummary.value?.has_incomplete_size)
 const targetAvailableBytes = computed(() => Number(targetSummary.value?.available_bytes || 0))
 const mergeTaskRunning = computed(() => mergeTask.value?.status === 'running')
+const mergeTaskCompleted = computed(() => mergeTask.value?.status === 'completed')
 const mergeTaskProgressPercent = computed(() => Number(mergeTask.value?.progress_percent || 0))
 const spaceCheckReady = computed(() => {
   if (!sourceRepo.value || !targetRepo.value) return false
@@ -150,7 +157,7 @@ const hasEnoughSpace = computed(() => {
   return sourceTotalBytes.value < targetAvailableBytes.value
 })
 const canSubmit = computed(() => {
-  return !!sourceRepo.value && !!targetRepo.value && hasEnoughSpace.value && !submitting.value && !mergeTaskRunning.value
+  return !!sourceRepo.value && !!targetRepo.value && hasEnoughSpace.value && !submitting.value && !mergeTaskRunning.value && !mergeTaskCompleted.value
 })
 const mergeButtonLabel = computed(() => {
   if (mergeTaskRunning.value) {

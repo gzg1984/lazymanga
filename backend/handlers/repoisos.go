@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"lazymanga/models"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -44,7 +46,30 @@ func GetRepoISOs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repoisos failed: " + err.Error()})
 		return
 	}
+	for i := range rows {
+		populateRepoISOMetadata(&rows[i])
+	}
 
 	log.Printf("GetRepoISOs: success id=%s root=%q db=%q total=%d", id, rootAbs, dbPath, len(rows))
 	c.JSON(http.StatusOK, rows)
+}
+
+func populateRepoISOMetadata(row *models.RepoISO) {
+	if row == nil {
+		return
+	}
+	row.Metadata = nil
+	trimmed := strings.TrimSpace(row.MetadataJSON)
+	if trimmed == "" || trimmed == "{}" {
+		return
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return
+	}
+	if len(decoded) == 0 {
+		return
+	}
+	row.Metadata = decoded
 }

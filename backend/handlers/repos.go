@@ -4,14 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"lazymanga/models"
-	"lazymanga/normalization"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -49,7 +47,7 @@ func EnsureBasicRepository(lazymangaDBPath string) error {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		repo = models.Repository{
 			Name:        basicRepoName,
-			RepoTypeKey: repoTypeNone,
+			RepoTypeKey: defaultRepoTypeKey,
 			Basic:       true,
 			RootPath:    baseRootPath,
 			DBFile:      "repo.db",
@@ -90,8 +88,8 @@ func EnsureBasicRepository(lazymangaDBPath string) error {
 		repo.ExternalDeviceName = ""
 		changed = true
 	}
-	if strings.TrimSpace(repo.RepoTypeKey) != repoTypeNone {
-		repo.RepoTypeKey = repoTypeNone
+	if strings.TrimSpace(strings.ToLower(repo.RepoTypeKey)) != defaultRepoTypeKey {
+		repo.RepoTypeKey = defaultRepoTypeKey
 		changed = true
 	}
 
@@ -148,13 +146,14 @@ func GetRepos(c *gin.Context) {
 		return
 	}
 
-	updated, refreshErrs := RefreshRepositoryMetadataCaches(repos)
+	forceRefresh := strings.EqualFold(strings.TrimSpace(c.Query("refresh_metadata")), "true") || c.Query("refresh_metadata") == "1"
+	refreshed, updated, refreshErrs := RefreshRepositoryMetadataCachesIfStale(repos, forceRefresh)
 	if len(refreshErrs) > 0 {
 		for _, refreshErr := range refreshErrs {
 			log.Printf("GetRepos: metadata refresh warning: %v", refreshErr)
 		}
 	}
-	if updated > 0 {
+	if refreshed && updated > 0 {
 		if err := applyRepositoryListOrder(db).Find(&repos).Error; err != nil {
 			log.Printf("GetRepos: requery after metadata refresh failed: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "db requery failed: " + err.Error()})
@@ -533,33 +532,7 @@ func resolveRepoDBPath(repo models.Repository) (string, string, error) {
 }
 
 func triggerAutoNormalizeForNewRepo(repo models.Repository) {
-	if strings.TrimSpace(repo.RootPath) == "" {
-		return
-	}
-
-	go func(r models.Repository) {
-		startedAt := time.Now()
-
-		repoDB, rootAbs, dbPath, err := openRepoScopedDB(r)
-		if err != nil {
-			log.Printf("CreateRepoAutoNormalize: open repo db failed repo=%d error=%v", r.ID, err)
-			return
-		}
-
-		records, err := collectRepoISORecords(rootAbs)
-		if err != nil {
-			log.Printf("CreateRepoAutoNormalize: scan failed repo=%d root=%q error=%v", r.ID, rootAbs, err)
-			return
-		}
-
-		if err := rebuildRepoISOIndex(repoDB, records); err != nil {
-			log.Printf("CreateRepoAutoNormalize: rebuild index failed repo=%d db=%q error=%v", r.ID, dbPath, err)
-			return
-		}
-
-		normalization.StartAsyncPostIndexNormalization(r.ID, repoDB, rootAbs, records)
-		log.Printf("CreateRepoAutoNormalize: done repo=%d root=%q db=%q indexed=%d elapsed=%s", r.ID, rootAbs, dbPath, len(records), time.Since(startedAt).Truncate(time.Millisecond))
-	}(repo)
+	triggerRepoIncrementalNormalize(repo, "create-repo")
 }
 
 func ensureRepoRootExistsForCreate(repo models.Repository) error {

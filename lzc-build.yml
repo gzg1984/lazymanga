@@ -19,7 +19,7 @@ pkgout: ./
 icon: lazymanga.png
 
 # dvshell 指定开发依赖的情况
-# 这种情况下，选用 alpine:latest 作为基础镜像，在 dependencies 中添加所需要的开发依赖即可
+# 这种情况下，选用 alpine:latest 作为基础元素，在 dependencies 中添加所需要的开发依赖即可
 # 如果 dependencies 和 build 同时存在，将会优先使用 dependencies
 devshell:
   routes:

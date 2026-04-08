@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -18,9 +20,11 @@ import (
 )
 
 type manualEditRepoISORequest struct {
-	TargetType string `json:"target_type"`
-	NameMode   string `json:"name_mode"`
-	ManualName string `json:"manual_name"`
+	TargetType             string         `json:"target_type"`
+	NameMode               string         `json:"name_mode"`
+	ManualName             string         `json:"manual_name"`
+	Metadata               map[string]any `json:"metadata"`
+	ForceRestoreSourcePath bool           `json:"force_restore_source_path"`
 }
 
 func ManualEditRepoISO(c *gin.Context) {
@@ -62,11 +66,11 @@ func ManualEditRepoISO(c *gin.Context) {
 	if err := repoDB.First(&row, isoID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			log.Printf("ManualEditRepoISO: iso record not found repo=%s iso=%s", repoID, isoID)
-			c.JSON(http.StatusNotFound, gin.H{"error": "repo iso record not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "repository entry not found"})
 			return
 		}
 		log.Printf("ManualEditRepoISO: query iso failed repo=%s iso=%s error=%v", repoID, isoID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repository entry failed: " + err.Error()})
 		return
 	}
 
@@ -77,7 +81,8 @@ func ManualEditRepoISO(c *gin.Context) {
 		return
 	}
 
-	if err := normalizeManualEditRepoISORequest(&req); err != nil {
+	editorMode := resolveRepoISOManualEditorMode(info, row)
+	if err := normalizeManualEditRepoISORequest(&req, editorMode); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -92,6 +97,50 @@ func ManualEditRepoISO(c *gin.Context) {
 		return
 	}
 
+	if req.ForceRestoreSourcePath {
+		if !row.IsDirectory {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "force restore only supports directory records"})
+			return
+		}
+
+		finalAbs, finalRelPath, moved, err := restoreRepoISODirectoryToStoredSourcePath(rootAbs, &row)
+		if err != nil {
+			log.Printf("ManualEditRepoISO: restore source path failed repo=%s iso=%s error=%v", repoID, isoID, err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "restore original path failed: " + err.Error()})
+			return
+		}
+
+		updates := map[string]interface{}{
+			"path":      row.Path,
+			"file_name": row.FileName,
+			"tags":      models.ExtractTagsFromFileName(row.FileName),
+		}
+		if err := repoDB.Model(&models.RepoISO{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+			log.Printf("ManualEditRepoISO: persist restored source path failed repo=%s iso=%s error=%v", repoID, isoID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "update repository entry failed: " + err.Error()})
+			return
+		}
+		if err := repoDB.First(&row, row.ID).Error; err != nil {
+			log.Printf("ManualEditRepoISO: reload restored row failed repo=%s iso=%s error=%v", repoID, isoID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "reload repository entry failed: " + err.Error()})
+			return
+		}
+
+		populateRepoISOMetadata(&row)
+		log.Printf("ManualEditRepoISO: restored source path repo=%d iso=%d moved=%t final=%q abs=%q", repo.ID, row.ID, moved, finalRelPath, finalAbs)
+		c.JSON(http.StatusOK, gin.H{
+			"message":              "restored to stored source path",
+			"repo_id":              repo.ID,
+			"iso_id":               row.ID,
+			"auto_normalize":       info.AutoNormalize,
+			"editor_mode":          editorMode,
+			"moved":                moved,
+			"restored_source_path": finalRelPath,
+			"record":               row,
+		})
+		return
+	}
+
 	currentFileName := strings.TrimSpace(row.FileName)
 	if currentFileName == "" {
 		currentFileName = filepath.Base(filepath.FromSlash(strings.TrimSpace(row.Path)))
@@ -103,6 +152,86 @@ func ManualEditRepoISO(c *gin.Context) {
 	targetFileName, err := decideManualEditTargetFileName(req, row.Path, currentFileName)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if editorMode == manualEditorModeMetadata {
+		updates := map[string]interface{}{}
+		moved := false
+
+		if row.IsDirectory {
+			manualTargetName := ""
+			if req.NameMode == "manual" {
+				manualTargetName = targetFileName
+			}
+			moved, err = normalization.ApplyDirectoryMetadataEdit(repo.ID, repoDB, rootAbs, &row, req.Metadata, manualTargetName)
+			if err != nil {
+				log.Printf("ManualEditRepoISO: apply directory metadata edit failed repo=%s iso=%s error=%v", repoID, isoID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "apply directory metadata edit failed: " + err.Error()})
+				return
+			}
+			updates["metadata_json"] = row.MetadataJSON
+			updates["path"] = row.Path
+			updates["file_name"] = row.FileName
+			updates["tags"] = models.ExtractTagsFromFileName(row.FileName)
+		} else {
+			if req.Metadata != nil {
+				metadataJSON, err := buildManualEditMetadataJSON(req.Metadata)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "metadata is invalid: " + err.Error()})
+					return
+				}
+				updates["metadata_json"] = metadataJSON
+			}
+
+			if req.NameMode == "manual" {
+				targetAbs, err := buildManualEditTargetAbs(rootAbs, row.Path, "", targetFileName)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid rename target path: " + err.Error()})
+					return
+				}
+
+				_, finalRelPath, renameMoved, err := relocateRepoISOFile(sourceAbs, targetAbs, rootAbs)
+				if err != nil {
+					log.Printf("ManualEditRepoISO: metadata rename failed repo=%s iso=%s source=%q target=%q error=%v", repoID, isoID, sourceAbs, targetAbs, err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "rename file failed: " + err.Error()})
+					return
+				}
+
+				newFileName := filepath.Base(finalRelPath)
+				updates["path"] = finalRelPath
+				updates["file_name"] = newFileName
+				updates["tags"] = models.ExtractTagsFromFileName(newFileName)
+				moved = renameMoved
+			}
+		}
+
+		if len(updates) > 0 {
+			if err := repoDB.Model(&models.RepoISO{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+				log.Printf("ManualEditRepoISO: update metadata-editor row failed repo=%s iso=%s error=%v", repoID, isoID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "update repository entry failed: " + err.Error()})
+				return
+			}
+			if err := repoDB.First(&row, row.ID).Error; err != nil {
+				log.Printf("ManualEditRepoISO: reload metadata-editor row failed repo=%s iso=%s error=%v", repoID, isoID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "reload repository entry failed: " + err.Error()})
+				return
+			}
+		}
+
+		populateRepoISOMetadata(&row)
+		log.Printf("ManualEditRepoISO: metadata editor applied repo=%d iso=%d mode=%s moved=%t", repo.ID, row.ID, req.NameMode, moved)
+		c.JSON(http.StatusOK, gin.H{
+			"message":          "manual edit applied",
+			"repo_id":          repo.ID,
+			"iso_id":           row.ID,
+			"auto_normalize":   info.AutoNormalize,
+			"editor_mode":      editorMode,
+			"auto_relocate":    false,
+			"moved":            moved,
+			"relocate_skipped": true,
+			"record":           row,
+		})
 		return
 	}
 
@@ -138,21 +267,23 @@ func ManualEditRepoISO(c *gin.Context) {
 
 		if err := repoDB.Model(&models.RepoISO{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
 			log.Printf("ManualEditRepoISO: update flags failed repo=%s iso=%s error=%v", repoID, isoID, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "update repo iso record failed: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "update repository entry failed: " + err.Error()})
 			return
 		}
 		if err := repoDB.First(&row, row.ID).Error; err != nil {
 			log.Printf("ManualEditRepoISO: reload row failed repo=%s iso=%s error=%v", repoID, isoID, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "reload repo iso failed: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "reload repository entry failed: " + err.Error()})
 			return
 		}
 
+		populateRepoISOMetadata(&row)
 		log.Printf("ManualEditRepoISO: skipped auto relocation repo=%d iso=%d auto_normalize=%t", repo.ID, row.ID, info.AutoNormalize)
 		c.JSON(http.StatusOK, gin.H{
 			"message":          "manual edit applied",
 			"repo_id":          repo.ID,
 			"iso_id":           row.ID,
 			"auto_normalize":   info.AutoNormalize,
+			"editor_mode":      editorMode,
 			"auto_relocate":    false,
 			"moved":            moved,
 			"relocate_skipped": true,
@@ -190,22 +321,24 @@ func ManualEditRepoISO(c *gin.Context) {
 	}
 	if err := repoDB.Model(&models.RepoISO{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
 		log.Printf("ManualEditRepoISO: update row failed repo=%s iso=%s error=%v", repoID, isoID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "update repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update repository entry failed: " + err.Error()})
 		return
 	}
 
 	if err := repoDB.First(&row, row.ID).Error; err != nil {
 		log.Printf("ManualEditRepoISO: reload row failed repo=%s iso=%s error=%v", repoID, isoID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "reload repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "reload repository entry failed: " + err.Error()})
 		return
 	}
 
+	populateRepoISOMetadata(&row)
 	log.Printf("ManualEditRepoISO: done repo=%d iso=%d type=%s mode=%s moved=%t source=%q final=%q db=%q abs=%q matchType=%q keyword=%q", repo.ID, row.ID, req.TargetType, req.NameMode, moved, sourceAbs, finalRelPath, dbPath, finalAbs, matchedType, matchedKeyword)
 	c.JSON(http.StatusOK, gin.H{
 		"message":            "manual edit applied",
 		"repo_id":            repo.ID,
 		"iso_id":             row.ID,
 		"auto_normalize":     info.AutoNormalize,
+		"editor_mode":        editorMode,
 		"target_type":        req.TargetType,
 		"name_mode":          req.NameMode,
 		"target_dir":         targetDir,
@@ -216,12 +349,24 @@ func ManualEditRepoISO(c *gin.Context) {
 	})
 }
 
-func normalizeManualEditRepoISORequest(req *manualEditRepoISORequest) error {
+func normalizeManualEditRepoISORequest(req *manualEditRepoISORequest, editorMode string) error {
 	req.TargetType = strings.ToLower(strings.TrimSpace(req.TargetType))
 	req.NameMode = strings.ToLower(strings.TrimSpace(req.NameMode))
 	req.ManualName = strings.TrimSpace(req.ManualName)
+	req.Metadata = sanitizeManualEditMetadata(req.Metadata)
 
-	if req.TargetType != "os" && req.TargetType != "entertainment" && req.TargetType != "others" {
+	mode := normalizeManualEditorMode(editorMode, "", "")
+	if req.ForceRestoreSourcePath {
+		if req.NameMode == "" {
+			req.NameMode = "auto"
+		}
+		return nil
+	}
+	if mode == manualEditorModeMetadata {
+		if req.TargetType != "" && req.TargetType != "os" && req.TargetType != "entertainment" && req.TargetType != "others" {
+			return fmt.Errorf("target_type must be os, entertainment or others when provided")
+		}
+	} else if req.TargetType != "os" && req.TargetType != "entertainment" && req.TargetType != "others" {
 		return fmt.Errorf("target_type must be os, entertainment or others")
 	}
 	if req.NameMode == "" {
@@ -235,11 +380,137 @@ func normalizeManualEditRepoISORequest(req *manualEditRepoISORequest) error {
 	}
 	if req.NameMode == "manual" {
 		manualName := sanitizeInputFileName(req.ManualName)
-		if !strings.EqualFold(filepath.Ext(manualName), ".iso") {
-			return fmt.Errorf("manual_name must end with .iso")
+		if manualName == "" {
+			return fmt.Errorf("manual_name is invalid")
 		}
 	}
 	return nil
+}
+
+func resolveRepoISOManualEditorMode(info models.RepoInfo, row models.RepoISO) string {
+	binding := normalization.ResolveEffectiveRuleBookBinding(info)
+	mode := normalizeManualEditorMode(info.ManualEditorMode, info.RepoTypeKey, binding.Name)
+	if mode == manualEditorModeLegacy && row.IsDirectory && strings.TrimSpace(row.MetadataJSON) != "" {
+		return manualEditorModeMetadata
+	}
+	return mode
+}
+
+func sanitizeManualEditMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	cleaned := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		normalizedKey := strings.TrimSpace(key)
+		if normalizedKey == "" || strings.HasPrefix(normalizedKey, "_") {
+			continue
+		}
+		normalizedValue, ok := normalizeManualEditMetadataValue(value)
+		if !ok {
+			continue
+		}
+		cleaned[normalizedKey] = normalizedValue
+	}
+	return cleaned
+}
+
+func normalizeManualEditMetadataValue(value any) (any, bool) {
+	switch v := value.(type) {
+	case nil:
+		return "", true
+	case string:
+		return strings.TrimSpace(v), true
+	case bool:
+		return v, true
+	case float64:
+		return v, true
+	case float32:
+		return v, true
+	case int:
+		return v, true
+	case int32:
+		return v, true
+	case int64:
+		return v, true
+	case []string:
+		items := make([]string, 0, len(v))
+		for _, item := range v {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				items = append(items, trimmed)
+			}
+		}
+		if len(items) == 0 {
+			return "", true
+		}
+		return items, true
+	case []any:
+		items := make([]any, 0, len(v))
+		for _, item := range v {
+			normalizedItem, ok := normalizeManualEditMetadataValue(item)
+			if ok {
+				switch nv := normalizedItem.(type) {
+				case string:
+					if strings.TrimSpace(nv) == "" {
+						continue
+					}
+				}
+				items = append(items, normalizedItem)
+			}
+		}
+		if len(items) == 0 {
+			return "", true
+		}
+		return items, true
+	default:
+		return nil, false
+	}
+}
+
+func buildManualEditMetadataJSON(metadata map[string]any) (string, error) {
+	if len(metadata) == 0 {
+		return "", nil
+	}
+
+	cleaned := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		normalizedKey := strings.TrimSpace(key)
+		if normalizedKey == "" || strings.HasPrefix(normalizedKey, "_") {
+			continue
+		}
+		normalizedValue, ok := normalizeManualEditMetadataValue(value)
+		if !ok {
+			continue
+		}
+		switch v := normalizedValue.(type) {
+		case string:
+			if strings.TrimSpace(v) == "" {
+				continue
+			}
+		case []string:
+			if len(v) == 0 {
+				continue
+			}
+		case []any:
+			if len(v) == 0 {
+				continue
+			}
+		}
+		cleaned[normalizedKey] = normalizedValue
+	}
+	if len(cleaned) == 0 {
+		return "", nil
+	}
+
+	encoded, err := json.Marshal(cleaned)
+	if err != nil {
+		return "", err
+	}
+	if string(encoded) == "{}" || string(encoded) == "null" {
+		return "", nil
+	}
+	return string(encoded), nil
 }
 
 func repoISOFlagsForTargetType(targetType string) (bool, bool) {
@@ -263,8 +534,15 @@ func decideManualEditTargetFileName(req manualEditRepoISORequest, currentRelPath
 		if manualName == "" {
 			return "", fmt.Errorf("manual_name is invalid")
 		}
-		if !strings.EqualFold(filepath.Ext(manualName), ".iso") {
-			return "", fmt.Errorf("manual_name must end with .iso")
+
+		currentExt := strings.ToLower(filepath.Ext(currentFileName))
+		manualExt := strings.ToLower(filepath.Ext(manualName))
+		if currentExt != "" {
+			if manualExt == "" {
+				manualName += currentExt
+			} else if manualExt != currentExt {
+				return "", fmt.Errorf("manual_name must keep the same file extension as current file")
+			}
 		}
 		return manualName, nil
 	}
@@ -369,6 +647,173 @@ func resolveRepoISOAbsPath(rootAbs string, relPath string) (string, error) {
 	return absPath, nil
 }
 
+func restoreRepoISODirectoryToStoredSourcePath(rootAbs string, row *models.RepoISO) (string, string, bool, error) {
+	if row == nil {
+		return "", "", false, fmt.Errorf("row is nil")
+	}
+	if !row.IsDirectory {
+		return "", "", false, fmt.Errorf("record is not a directory")
+	}
+
+	sourceAbs, err := resolveRepoISOAbsPath(rootAbs, row.Path)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	targetRelPath, err := resolveStoredSourcePathFromRepoISO(row)
+	if err != nil {
+		return "", "", false, err
+	}
+	if targetRelPath == "" {
+		return "", "", false, fmt.Errorf("stored original path is empty")
+	}
+
+	targetAbs := filepath.Join(rootAbs, filepath.FromSlash(targetRelPath))
+	finalAbs, finalRelPath, moved, err := relocateRepoISOPathToExactTarget(sourceAbs, targetAbs, rootAbs)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	row.Path = finalRelPath
+	row.FileName = filepath.Base(finalRelPath)
+	return finalAbs, finalRelPath, moved, nil
+}
+
+func resolveStoredSourcePathFromRepoISO(row *models.RepoISO) (string, error) {
+	if row == nil {
+		return "", fmt.Errorf("row is nil")
+	}
+
+	trimmed := strings.TrimSpace(row.MetadataJSON)
+	if trimmed == "" || trimmed == "{}" {
+		return "", fmt.Errorf("missing metadata source path")
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &metadata); err != nil {
+		return "", fmt.Errorf("invalid metadata json: %w", err)
+	}
+
+	sourcePath := sanitizeStoredSourceRelativePath(metadataStringValue(metadata, "source_path"))
+	if sourcePath != "" {
+		return sourcePath, nil
+	}
+
+	originalName := sanitizeStoredSourcePathSegment(metadataStringValue(metadata, "original_name"))
+	if originalName == "" {
+		return "", fmt.Errorf("missing source_path in metadata")
+	}
+
+	parentDir := filepath.ToSlash(filepath.Dir(strings.TrimSpace(row.Path)))
+	if parentDir == "." {
+		parentDir = ""
+	}
+	if parentDir == "" {
+		return originalName, nil
+	}
+	return sanitizeStoredSourceRelativePath(parentDir + "/" + originalName), nil
+}
+
+func sanitizeStoredSourcePathSegment(name string) string {
+	replacer := strings.NewReplacer(
+		"/", "／",
+		"\\", "＼",
+		":", "：",
+		"*", "＊",
+		"?", "？",
+		`"`, "＂",
+		"<", "＜",
+		">", "＞",
+		"|", "｜",
+	)
+	cleaned := replacer.Replace(strings.TrimSpace(name))
+	cleaned = strings.Trim(cleaned, ". ")
+	return strings.TrimSpace(cleaned)
+}
+
+func sanitizeStoredSourceRelativePath(raw string) string {
+	cleaned := strings.TrimSpace(filepath.ToSlash(raw))
+	if cleaned == "" {
+		return ""
+	}
+	cleaned = strings.TrimPrefix(path.Clean("/"+cleaned), "/")
+	if cleaned == "." {
+		return ""
+	}
+	parts := strings.Split(cleaned, "/")
+	sanitized := make([]string, 0, len(parts))
+	for _, part := range parts {
+		segment := sanitizeStoredSourcePathSegment(part)
+		if segment == "" || segment == "." || segment == ".." {
+			continue
+		}
+		sanitized = append(sanitized, segment)
+	}
+	return strings.Join(sanitized, "/")
+}
+
+func metadataStringValue(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func relocateRepoISOPathToExactTarget(sourceAbs string, targetAbs string, rootAbs string) (string, string, bool, error) {
+	if sameRepoISOPath(sourceAbs, targetAbs) {
+		rel, err := filepath.Rel(rootAbs, targetAbs)
+		if err != nil {
+			return "", "", false, err
+		}
+		return targetAbs, filepath.ToSlash(rel), false, nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		return "", "", false, err
+	}
+
+	sourceInfo, err := os.Stat(sourceAbs)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	targetInfo, err := os.Stat(targetAbs)
+	switch {
+	case err == nil:
+		if sourceInfo.IsDir() && targetInfo.IsDir() {
+			if err := copyDirectoryRecursive(sourceAbs, targetAbs); err != nil {
+				return "", "", false, err
+			}
+			if err := os.RemoveAll(sourceAbs); err != nil {
+				return "", "", false, err
+			}
+		} else {
+			return "", "", false, fmt.Errorf("target path already exists: %q", targetAbs)
+		}
+		rel, relErr := filepath.Rel(rootAbs, targetAbs)
+		if relErr != nil {
+			return "", "", true, relErr
+		}
+		return targetAbs, filepath.ToSlash(rel), true, nil
+	case !os.IsNotExist(err):
+		return "", "", false, err
+	}
+
+	if err := moveRepoISOPathWithFallback(sourceAbs, targetAbs); err != nil {
+		return "", "", false, err
+	}
+
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return "", "", true, err
+	}
+	return targetAbs, filepath.ToSlash(rel), true, nil
+}
+
 func relocateRepoISOFile(sourceAbs string, targetAbs string, rootAbs string) (string, string, bool, error) {
 	if sameRepoISOPath(sourceAbs, targetAbs) {
 		rel, err := filepath.Rel(rootAbs, targetAbs)
@@ -387,7 +832,7 @@ func relocateRepoISOFile(sourceAbs string, targetAbs string, rootAbs string) (st
 		return "", "", false, err
 	}
 
-	if err := moveRepoISOFileWithFallback(sourceAbs, finalTargetAbs); err != nil {
+	if err := moveRepoISOPathWithFallback(sourceAbs, finalTargetAbs); err != nil {
 		return "", "", false, err
 	}
 
@@ -422,6 +867,27 @@ func findRepoISOAvailableTargetPath(targetAbs string) (string, error) {
 	}
 
 	return "", fmt.Errorf("unable to allocate unique target for %q", targetAbs)
+}
+
+func moveRepoISOPathWithFallback(sourceAbs string, targetAbs string) error {
+	sourceInfo, err := os.Stat(sourceAbs)
+	if err != nil {
+		return err
+	}
+	if !sourceInfo.IsDir() {
+		return moveRepoISOFileWithFallback(sourceAbs, targetAbs)
+	}
+
+	if err := os.Rename(sourceAbs, targetAbs); err == nil {
+		return nil
+	} else if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+
+	if err := copyDirectoryRecursive(sourceAbs, targetAbs); err != nil {
+		return err
+	}
+	return os.RemoveAll(sourceAbs)
 }
 
 func moveRepoISOFileWithFallback(sourceAbs string, targetAbs string) error {

@@ -260,6 +260,10 @@ func UpdateRepoPath(c *gin.Context) {
 		return
 	}
 
+	if oldPath != repo.RootPath || oldInternal != repo.IsInternal || oldExternalDevice != repo.ExternalDeviceName {
+		triggerRepoIncrementalNormalize(repo, "update-path")
+	}
+
 	log.Printf("UpdateRepoPath: success id=%s path %q->%q internal %t->%t extDevice %q->%q", id, oldPath, repo.RootPath, oldInternal, repo.IsInternal, oldExternalDevice, repo.ExternalDeviceName)
 	c.JSON(http.StatusOK, repo)
 }

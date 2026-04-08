@@ -8,9 +8,29 @@ The target reader is future agents (or developers) who need to change normalizat
 Normalization is triggered from `backend/handlers/repo_normalize.go` after `repoisos` rows are rebuilt.
 
 Flow:
-1. Scan ISO files and build in-memory records (MD5 empty).
+1. Scan files matched by the bound rulebook's `scan.extensions` and build in-memory records (MD5 empty).
 2. Rebuild `repoisos` table.
 3. Start async normalization pipeline on inserted rows.
+
+Example rulebook scan config:
+
+```json
+{
+  "name": "manga-files",
+  "version": "v1",
+  "scan": {
+    "extensions": [".cbz", ".cbr", ".zip", ".pdf"],
+    "directory_rules": [
+      {
+        "name": "image-folder-as-volume",
+        "extensions": [".jpg", ".jpeg", ".png", ".webp"],
+        "min_file_count": 5
+      }
+    ]
+  },
+  "rules": []
+}
+```
 
 The API returns quickly after step 3 starts.
 

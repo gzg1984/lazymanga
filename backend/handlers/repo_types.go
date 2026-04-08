@@ -16,10 +16,47 @@ import (
 
 const (
 	defaultRepoTypeKey              string = "manga"
+	karitaRepoTypeKey               string = "karita-manga"
 	defaultRepoSettingsOverrideJSON string = "{}"
+	manualEditorModeLegacy          string = "legacy-type-editor"
+	manualEditorModeMetadata        string = "metadata-editor"
 )
 
 var repoTypeKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+func defaultManualEditorModeForRepo(repoTypeKey string, ruleBookName string) string {
+	key := strings.TrimSpace(strings.ToLower(repoTypeKey))
+	rulebook := strings.TrimSpace(strings.ToLower(ruleBookName))
+	if key == defaultRepoTypeKey || key == karitaRepoTypeKey || rulebook == "karita-manga" || rulebook == "manga-files" {
+		return manualEditorModeMetadata
+	}
+	return manualEditorModeLegacy
+}
+
+func normalizeManualEditorMode(mode string, repoTypeKey string, ruleBookName string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case "metadata", manualEditorModeMetadata:
+		return manualEditorModeMetadata
+	case "legacy", manualEditorModeLegacy:
+		return manualEditorModeLegacy
+	default:
+		return defaultManualEditorModeForRepo(repoTypeKey, ruleBookName)
+	}
+}
+
+func validateManualEditorMode(mode string, repoTypeKey string, ruleBookName string) (string, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(mode))
+	if trimmed == "" {
+		return normalizeManualEditorMode("", repoTypeKey, ruleBookName), nil
+	}
+	if trimmed == "metadata" || trimmed == manualEditorModeMetadata {
+		return manualEditorModeMetadata, nil
+	}
+	if trimmed == "legacy" || trimmed == manualEditorModeLegacy {
+		return manualEditorModeLegacy, nil
+	}
+	return "", fmt.Errorf("manual_editor_mode must be %s or %s", manualEditorModeLegacy, manualEditorModeMetadata)
+}
 
 type repoTypeSettings struct {
 	AddButton          bool   `json:"add_button"`
@@ -29,6 +66,7 @@ type repoTypeSettings struct {
 	ShowMD5            bool   `json:"show_md5"`
 	ShowSize           bool   `json:"show_size"`
 	SingleMove         bool   `json:"single_move"`
+	ManualEditorMode   string `json:"manual_editor_mode"`
 	RuleBookName       string `json:"rulebook_name"`
 	RuleBookVersion    string `json:"rulebook_version"`
 }
@@ -41,6 +79,7 @@ type repoTypeSettingsOverride struct {
 	ShowMD5            *bool   `json:"show_md5,omitempty"`
 	ShowSize           *bool   `json:"show_size,omitempty"`
 	SingleMove         *bool   `json:"single_move,omitempty"`
+	ManualEditorMode   *string `json:"manual_editor_mode,omitempty"`
 	RuleBookName       *string `json:"rulebook_name,omitempty"`
 	RuleBookVersion    *string `json:"rulebook_version,omitempty"`
 }
@@ -58,6 +97,7 @@ type repoTypeUpsertPayload struct {
 	ShowMD5            *bool  `json:"show_md5"`
 	ShowSize           *bool  `json:"show_size"`
 	SingleMove         *bool  `json:"single_move"`
+	ManualEditorMode   string `json:"manual_editor_mode"`
 	RuleBookName       string `json:"rulebook_name"`
 	RuleBookVersion    string `json:"rulebook_version"`
 }
@@ -67,12 +107,8 @@ type repoTypeSettingsUpdatePayload struct {
 	SettingsOverride json.RawMessage `json:"settings_override"`
 }
 
-func EnsureDefaultRepoTypes() error {
-	if db == nil {
-		return errors.New("database is not initialized")
-	}
-
-	defaults := []models.RepoTypeDef{
+func defaultRepoTypeDefinitions() []models.RepoTypeDef {
+	return []models.RepoTypeDef{
 		{
 			Key:                repoTypeNone,
 			Name:               "无类型",
@@ -86,6 +122,7 @@ func EnsureDefaultRepoTypes() error {
 			ShowMD5:            true,
 			ShowSize:           true,
 			SingleMove:         true,
+			ManualEditorMode:   manualEditorModeLegacy,
 			RuleBookName:       "noop",
 			RuleBookVersion:    "v1",
 		},
@@ -96,20 +133,38 @@ func EnsureDefaultRepoTypes() error {
 			Enabled:            true,
 			SortOrder:          20,
 			AddButton:          false,
-			AddDirectoryButton: true,
+			AddDirectoryButton: false,
 			DeleteButton:       true,
 			AutoNormalize:      false,
 			ShowMD5:            false,
 			ShowSize:           true,
 			SingleMove:         true,
-			RuleBookName:       "noop",
+			ManualEditorMode:   manualEditorModeMetadata,
+			RuleBookName:       "manga-files",
 			RuleBookVersion:    "v1",
 		},
 		{
-			Key:                repoTypeOS,
-			Name:               "操作系统镜像库",
-			Description:        "兼容旧版系统镜像整理流程的仓库模板",
+			Key:                karitaRepoTypeKey,
+			Name:               "Karita漫画仓库",
+			Description:        "使用 karita 目录改名与 sidecar 元数据规则书的漫画仓库模板",
 			Enabled:            true,
+			SortOrder:          30,
+			AddButton:          false,
+			AddDirectoryButton: false,
+			DeleteButton:       true,
+			AutoNormalize:      true,
+			ShowMD5:            false,
+			ShowSize:           true,
+			SingleMove:         true,
+			ManualEditorMode:   manualEditorModeMetadata,
+			RuleBookName:       "karita-manga",
+			RuleBookVersion:    "v1",
+		},/*
+		{
+			Key:                repoTypeOS,
+			Name:               "操作系统元素库",
+			Description:        "兼容旧版系统元素整理流程的仓库模板（默认停用）",
+			Enabled:            false,
 			SortOrder:          90,
 			AddButton:          false,
 			AddDirectoryButton: false,
@@ -118,10 +173,19 @@ func EnsureDefaultRepoTypes() error {
 			ShowMD5:            false,
 			ShowSize:           false,
 			SingleMove:         false,
+			ManualEditorMode:   manualEditorModeLegacy,
 			RuleBookName:       "default-os-relocation",
 			RuleBookVersion:    "v1",
-		},
+		},*/
 	}
+}
+
+func EnsureDefaultRepoTypes() error {
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+
+	defaults := defaultRepoTypeDefinitions()
 
 	for _, item := range defaults {
 		var existing models.RepoTypeDef
@@ -147,6 +211,7 @@ func EnsureDefaultRepoTypes() error {
 		existing.ShowMD5 = item.ShowMD5
 		existing.ShowSize = item.ShowSize
 		existing.SingleMove = item.SingleMove
+		existing.ManualEditorMode = item.ManualEditorMode
 		existing.RuleBookName = item.RuleBookName
 		existing.RuleBookVersion = item.RuleBookVersion
 		if saveErr := db.Save(&existing).Error; saveErr != nil {
@@ -169,17 +234,19 @@ func normalizeRepoTypeKey(key string) (string, error) {
 }
 
 func inferRepoTypeKeyFromInfo(info models.RepoInfo, repo models.Repository) string {
+	isBasic := info.Basic || repo.Basic
 	if v := strings.TrimSpace(strings.ToLower(info.RepoTypeKey)); v != "" {
-		return v
+		if !(isBasic && v == repoTypeNone) {
+			return v
+		}
 	}
 	if v := strings.TrimSpace(strings.ToLower(repo.RepoTypeKey)); v != "" {
-		return v
+		if !(isBasic && v == repoTypeNone) {
+			return v
+		}
 	}
 	if info.AutoNormalize && !info.AddButton && !info.DeleteButton && !info.ShowMD5 && !info.ShowSize && !info.SingleMove {
 		return repoTypeOS
-	}
-	if info.Basic || repo.Basic {
-		return repoTypeNone
 	}
 	return defaultRepoTypeKey
 }
@@ -193,6 +260,7 @@ func repoTypeDefToSettings(def models.RepoTypeDef) repoTypeSettings {
 		ShowMD5:            def.ShowMD5,
 		ShowSize:           def.ShowSize,
 		SingleMove:         def.SingleMove,
+		ManualEditorMode:   normalizeManualEditorMode(def.ManualEditorMode, def.Key, def.RuleBookName),
 		RuleBookName:       strings.TrimSpace(def.RuleBookName),
 		RuleBookVersion:    strings.TrimSpace(def.RuleBookVersion),
 	}
@@ -208,6 +276,7 @@ func repoInfoFallbackSettings(info models.RepoInfo) repoTypeSettings {
 		ShowMD5:            info.ShowMD5,
 		ShowSize:           info.ShowSize,
 		SingleMove:         info.SingleMove,
+		ManualEditorMode:   normalizeManualEditorMode(info.ManualEditorMode, info.RepoTypeKey, binding.Name),
 		RuleBookName:       binding.Name,
 		RuleBookVersion:    binding.Version,
 	}
@@ -241,6 +310,11 @@ func applyRepoSettingsOverride(base repoTypeSettings, override repoTypeSettingsO
 	}
 	if override.RuleBookVersion != nil {
 		result.RuleBookVersion = strings.TrimSpace(*override.RuleBookVersion)
+	}
+	if override.ManualEditorMode != nil {
+		result.ManualEditorMode = normalizeManualEditorMode(*override.ManualEditorMode, "", result.RuleBookName)
+	} else {
+		result.ManualEditorMode = normalizeManualEditorMode(result.ManualEditorMode, "", result.RuleBookName)
 	}
 	return result
 }
@@ -368,6 +442,10 @@ func applyEffectiveSettingsToRepoInfo(info *models.RepoInfo, repoTypeKey string,
 		info.SingleMove = effective.SingleMove
 		changed = true
 	}
+	if strings.TrimSpace(info.ManualEditorMode) != effective.ManualEditorMode || normalizeManualEditorMode(info.ManualEditorMode, repoTypeKey, effective.RuleBookName) != effective.ManualEditorMode {
+		info.ManualEditorMode = effective.ManualEditorMode
+		changed = true
+	}
 	if setRepoRulebookBindingOnInfo(info, effective.RuleBookName, effective.RuleBookVersion) {
 		changed = true
 	}
@@ -456,6 +534,11 @@ func CreateRepoType(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	manualEditorMode, err := validateManualEditorMode(req.ManualEditorMode, key, rulebookName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if _, _, err := normalization.ValidateRuleBookSpec(rulebookName, rulebookVersion); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "rulebook spec invalid: " + err.Error()})
 		return
@@ -484,6 +567,7 @@ func CreateRepoType(c *gin.Context) {
 		ShowMD5:            req.ShowMD5 != nil && *req.ShowMD5,
 		ShowSize:           req.ShowSize != nil && *req.ShowSize,
 		SingleMove:         req.SingleMove != nil && *req.SingleMove,
+		ManualEditorMode:   manualEditorMode,
 		RuleBookName:       rulebookName,
 		RuleBookVersion:    rulebookVersion,
 	}
@@ -553,6 +637,14 @@ func UpdateRepoType(c *gin.Context) {
 	if req.SingleMove != nil {
 		item.SingleMove = *req.SingleMove
 	}
+	if req.ManualEditorMode != "" {
+		manualEditorMode, err := validateManualEditorMode(req.ManualEditorMode, item.Key, item.RuleBookName)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		item.ManualEditorMode = manualEditorMode
+	}
 	if req.RuleBookName != "" || req.RuleBookVersion != "" {
 		rulebookName, rulebookVersion, err := normalizeBindingInput(req.RuleBookName, req.RuleBookVersion)
 		if err != nil {
@@ -565,8 +657,10 @@ func UpdateRepoType(c *gin.Context) {
 		}
 		item.RuleBookName = rulebookName
 		item.RuleBookVersion = rulebookVersion
+		item.ManualEditorMode = normalizeManualEditorMode(item.ManualEditorMode, item.Key, rulebookName)
 	}
 
+	item.ManualEditorMode = normalizeManualEditorMode(item.ManualEditorMode, item.Key, item.RuleBookName)
 	if strings.TrimSpace(item.Name) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
@@ -587,7 +681,7 @@ func DeleteRepoType(c *gin.Context) {
 		return
 	}
 
-	if key == repoTypeNone || key == defaultRepoTypeKey || key == repoTypeOS {
+	if key == repoTypeNone || key == defaultRepoTypeKey || key == karitaRepoTypeKey || key == repoTypeOS {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "built-in repo type cannot be deleted"})
 		return
 	}
@@ -604,9 +698,9 @@ func DeleteRepoType(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"message":      "repo type is still in use and has been disabled instead of deleted",
+			"message":       "repo type is still in use and has been disabled instead of deleted",
 			"repo_type_key": key,
-			"in_use_count": count,
+			"in_use_count":  count,
 		})
 		return
 	}
@@ -636,12 +730,23 @@ func GetRepoTypeSettings(c *gin.Context) {
 		return
 	}
 
+	directoryAddCautionMessage := ""
+	if effective.AddDirectoryButton && !repo.Basic && strings.TrimSpace(repo.RootPath) != "" {
+		directoryAddCautionMessage = "本仓库已设定根目录，直接添加目录可能导致数据迁移出错，请谨慎使用。"
+	}
+
 	resp := gin.H{
-		"repo_id":          repo.ID,
-		"repo_type_key":    repoTypeKey,
-		"settings_override": override,
-		"effective":        effective,
-		"resolution_note":  note,
+		"repo_id":                       repo.ID,
+		"repo_name":                     repo.Name,
+		"repo_basic":                    repo.Basic,
+		"repo_root_path":                repo.RootPath,
+		"repo_root_configured":          strings.TrimSpace(repo.RootPath) != "",
+		"repo_type_key":                 repoTypeKey,
+		"settings_override":             override,
+		"effective":                     effective,
+		"resolution_note":               note,
+		"directory_add_caution":         directoryAddCautionMessage != "",
+		"directory_add_caution_message": directoryAddCautionMessage,
 	}
 	if def != nil {
 		resp["template"] = def

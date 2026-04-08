@@ -1,6 +1,9 @@
 {
   "name": "default-os-relocation",
   "version": "v1",
+  "scan": {
+    "extensions": [".iso"]
+  },
   "rules": [
     {
       "id": "entertainment-explicit",

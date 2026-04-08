@@ -1,5 +1,8 @@
 {
   "name": "noop",
   "version": "v1",
+  "scan": {
+    "extensions": [".iso"]
+  },
   "rules": []
 }

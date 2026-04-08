@@ -82,12 +82,8 @@ func CreateRepoISO(c *gin.Context) {
 			return
 		}
 
-		row, copied, err := createRepoDirectoryEntry(repoDB, rootAbs, sourceAbs)
+		targetAbs, copied, err := importRepoDirectory(rootAbs, sourceAbs)
 		if err != nil {
-			if errors.Is(err, gorm.ErrDuplicatedKey) {
-				c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-				return
-			}
 			msg := err.Error()
 			status := http.StatusInternalServerError
 			if strings.Contains(msg, "already exists") {
@@ -97,13 +93,37 @@ func CreateRepoISO(c *gin.Context) {
 			return
 		}
 
+		targetRel, err := filepath.Rel(rootAbs, targetAbs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "resolve imported directory path failed: " + err.Error()})
+			return
+		}
+		targetRel = filepath.ToSlash(targetRel)
+
+		normalizeResult, err := runRepoIncrementalNormalize(repo, targetRel)
+		if err != nil {
+			msg := err.Error()
+			status := http.StatusInternalServerError
+			if strings.HasPrefix(msg, "prepare repo db failed: ") {
+				status = http.StatusBadRequest
+			}
+			c.JSON(status, gin.H{"error": msg})
+			return
+		}
+
 		c.JSON(http.StatusCreated, gin.H{
-			"message":   "repo directory added",
-			"repo_id":   repo.ID,
-			"source":    sourceRel,
-			"copied":    copied,
-			"path_kind": "directory",
-			"repo_iso":  row,
+			"message":                      "repo directory imported and scoped scan completed",
+			"repo_id":                      repo.ID,
+			"source":                       sourceRel,
+			"copied":                       copied,
+			"path_kind":                    "directory",
+			"target_path":                  targetRel,
+			"scan_scope":                   normalizeResult.ScanScope,
+			"scan_triggered":               true,
+			"scanned_iso_count":            normalizeResult.ScannedISOCount,
+			"existing_iso_count":           normalizeResult.ExistingISOCount,
+			"inserted_new_iso_count":       normalizeResult.InsertedNewISOCount,
+			"existing_missing_total_count": normalizeResult.ExistingMissingTotalCount,
 		})
 		return
 	}
@@ -111,8 +131,17 @@ func CreateRepoISO(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "source path is not a directory"})
 		return
 	}
-	if !strings.EqualFold(filepath.Ext(sourceAbs), ".iso") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "only .iso files are supported in file add mode"})
+
+	scanSpec := normalization.GetRuleBookScanSpecForRepo(repo.ID, repoDB)
+	if !scanSpec.ShouldScanFile(filepath.Base(sourceAbs)) {
+		allowed := strings.Join(scanSpec.Extensions, ", ")
+		if allowed == "" {
+			allowed = ".iso"
+		}
+		if allowed == "*" {
+			allowed = "all files"
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "current rulebook scan config does not include this file type, allowed: " + allowed})
 		return
 	}
 
@@ -151,10 +180,10 @@ func CreateRepoISO(c *gin.Context) {
 
 	var exists models.RepoISO
 	if err := repoDB.Where("path = ?", relPath).First(&exists).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "repo iso already exists", "id": exists.ID})
+		c.JSON(http.StatusConflict, gin.H{"error": "repository entry already exists", "id": exists.ID})
 		return
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query existing repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query existing repository entry failed: " + err.Error()})
 		return
 	}
 
@@ -171,13 +200,13 @@ func CreateRepoISO(c *gin.Context) {
 		Tags:      models.ExtractTagsFromFileName(filepath.Base(targetAbs)),
 	}
 	if err := repoDB.Create(&row).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "create repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create repository entry failed: " + err.Error()})
 		return
 	}
 
 	normalization.StartAsyncPostIndexNormalization(repo.ID, repoDB, rootAbs, []models.RepoISO{row})
 	c.JSON(http.StatusCreated, gin.H{
-		"message":  "repo iso added",
+		"message":  "repository entry added",
 		"repo_id":  repo.ID,
 		"source":   sourceRel,
 		"copied":   !sameRepoISOPath(sourceAbs, targetAbs),
@@ -185,52 +214,29 @@ func CreateRepoISO(c *gin.Context) {
 	})
 }
 
-func createRepoDirectoryEntry(repoDB *gorm.DB, rootAbs string, sourceAbs string) (models.RepoISO, bool, error) {
+func importRepoDirectory(rootAbs string, sourceAbs string) (string, bool, error) {
 	targetAbs := sourceAbs
 	if !isPathWithinRoot(rootAbs, sourceAbs) {
 		targetAbs = filepath.Join(rootAbs, "manual_added_dirs", filepath.Base(sourceAbs))
 		if !isPathWithinRoot(rootAbs, targetAbs) {
-			return models.RepoISO{}, false, fmt.Errorf("target path out of repo root")
+			return "", false, fmt.Errorf("target path out of repo root")
 		}
 
 		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
-			return models.RepoISO{}, false, fmt.Errorf("prepare target folder failed: %w", err)
+			return "", false, fmt.Errorf("prepare target folder failed: %w", err)
 		}
 
 		finalTargetAbs, err := findRepoISOAvailableTargetPath(targetAbs)
 		if err != nil {
-			return models.RepoISO{}, false, fmt.Errorf("allocate target path failed: %w", err)
+			return "", false, fmt.Errorf("allocate target path failed: %w", err)
 		}
 		if err := copyDirectoryRecursive(sourceAbs, finalTargetAbs); err != nil {
-			return models.RepoISO{}, false, fmt.Errorf("copy source directory failed: %w", err)
+			return "", false, fmt.Errorf("copy source directory failed: %w", err)
 		}
 		targetAbs = finalTargetAbs
 	}
 
-	relPath, err := filepath.Rel(rootAbs, targetAbs)
-	if err != nil {
-		return models.RepoISO{}, false, fmt.Errorf("resolve repo relative path failed: %w", err)
-	}
-	relPath = filepath.ToSlash(relPath)
-
-	var exists models.RepoISO
-	if err := repoDB.Where("path = ?", relPath).First(&exists).Error; err == nil {
-		return models.RepoISO{}, false, fmt.Errorf("repo path already exists")
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return models.RepoISO{}, false, fmt.Errorf("query existing repo path failed: %w", err)
-	}
-
-	row := models.RepoISO{
-		FileName:  filepath.Base(targetAbs),
-		Path:      relPath,
-		SizeBytes: models.UnknownRepoISOSizeBytes,
-		Tags:      models.ExtractTagsFromFileName(filepath.Base(targetAbs)),
-	}
-	if err := repoDB.Create(&row).Error; err != nil {
-		return models.RepoISO{}, false, fmt.Errorf("create repo directory failed: %w", err)
-	}
-
-	return row, !sameRepoISOPath(sourceAbs, targetAbs), nil
+	return targetAbs, !sameRepoISOPath(sourceAbs, targetAbs), nil
 }
 
 func copyDirectoryRecursive(source string, target string) error {

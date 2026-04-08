@@ -23,7 +23,7 @@ func (s MD5BackfillStep) Name() string {
 }
 
 func (s MD5BackfillStep) Process(_ uint, repoDB *gorm.DB, rootAbs string, record *models.RepoISO) error {
-	if strings.TrimSpace(record.MD5) != "" {
+	if record.IsDirectory || strings.TrimSpace(record.MD5) != "" {
 		return nil
 	}
 

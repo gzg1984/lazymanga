@@ -43,10 +43,10 @@ func DownloadRepoISO(c *gin.Context) {
 	var row models.RepoISO
 	if err := repoDB.First(&row, isoID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "repo iso record not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "repository entry not found"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repository entry failed: " + err.Error()})
 		return
 	}
 
@@ -70,6 +70,10 @@ func DownloadRepoISO(c *gin.Context) {
 		return
 	}
 	if fi.IsDir() {
+		if row.IsDirectory {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "directory entries are not downloadable as single files"})
+			return
+		}
 		if updateErr := updateRepoISOMissingFlag(repoDB, &row, true); updateErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "path is a directory and update missing flag failed: " + updateErr.Error()})
 			return

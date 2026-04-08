@@ -1,7 +1,13 @@
 <template>
-  <div v-if="showAddButton" class="repo-iso-add">
-    <el-button v-if="addFileButtonEnabled" type="primary" size="small" @click="openDialog('file')" :disabled="loadingRepoInfo">添加文件</el-button>
-    <el-button v-if="addDirectoryButtonEnabled" type="success" size="small" @click="openDialog('directory')" :disabled="loadingRepoInfo">添加目录</el-button>
+  <div v-if="showAddButton" class="repo-iso-add-wrap">
+    <div class="repo-iso-add">
+      <el-button v-if="addFileButtonEnabled" type="primary" size="small" @click="openDialog('file')" :disabled="loadingRepoInfo">添加文件</el-button>
+      <el-button v-if="addDirectoryButtonEnabled" type="success" size="small" @click="openDialog('directory')" :disabled="loadingRepoInfo">添加目录</el-button>
+    </div>
+
+    <div v-if="directoryAddCautionVisible" class="directory-add-caution">
+      ⚠️ {{ directoryAddCautionMessage }}
+    </div>
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="640px">
       <div class="dialog-hint">当前浏览：{{ currentDir || '/' }}</div>
@@ -43,13 +49,16 @@ const props = defineProps({
 const loadingRepoInfo = ref(false)
 const addFileButtonEnabled = ref(false)
 const addDirectoryButtonEnabled = ref(false)
+const directoryAddCautionVisible = ref(false)
+const directoryAddCautionMessage = ref('本仓库已设定根目录，直接添加目录可能导致数据迁移出错，请谨慎使用。')
+const lastWarnedRepoId = ref(0)
 const dialogVisible = ref(false)
 const fileList = ref([])
 const currentDir = ref('')
 const addMode = ref('file')
 
 const showAddButton = computed(() => !!props.repoId && (addFileButtonEnabled.value || addDirectoryButtonEnabled.value))
-const dialogTitle = computed(() => (addMode.value === 'directory' ? '选择目录' : '选择 ISO 文件'))
+const dialogTitle = computed(() => (addMode.value === 'directory' ? '选择目录' : '选择文件'))
 const canAddCurrentDirectory = computed(() => addMode.value === 'directory' && String(currentDir.value || '').trim() !== '')
 
 async function parseErrorMessage(res, fallback) {
@@ -78,6 +87,8 @@ async function fetchRepoInfo() {
   if (!props.repoId) {
     addFileButtonEnabled.value = false
     addDirectoryButtonEnabled.value = false
+    directoryAddCautionVisible.value = false
+    lastWarnedRepoId.value = 0
     return
   }
 
@@ -92,9 +103,22 @@ async function fetchRepoInfo() {
     const effective = data?.effective || {}
     addFileButtonEnabled.value = !!effective?.add_button
     addDirectoryButtonEnabled.value = !!effective?.add_directory_button
+
+    const cautionMessage = String(data?.directory_add_caution_message || '').trim()
+    directoryAddCautionVisible.value = !!data?.directory_add_caution && !!effective?.add_directory_button
+    directoryAddCautionMessage.value = cautionMessage || '本仓库已设定根目录，直接添加目录可能导致数据迁移出错，请谨慎使用。'
+
+    if (directoryAddCautionVisible.value && lastWarnedRepoId.value !== Number(props.repoId)) {
+      lastWarnedRepoId.value = Number(props.repoId)
+      ElMessage.warning(directoryAddCautionMessage.value)
+    }
+    if (!directoryAddCautionVisible.value) {
+      lastWarnedRepoId.value = 0
+    }
   } catch (e) {
     addFileButtonEnabled.value = false
     addDirectoryButtonEnabled.value = false
+    directoryAddCautionVisible.value = false
     console.error('[RepoIsoAddButton] fetchRepoInfo failed', e)
   } finally {
     loadingRepoInfo.value = false
@@ -103,6 +127,9 @@ async function fetchRepoInfo() {
 
 function openDialog(mode = 'file') {
   addMode.value = mode === 'directory' ? 'directory' : 'file'
+  if (addMode.value === 'directory' && directoryAddCautionVisible.value) {
+    ElMessage.warning(directoryAddCautionMessage.value)
+  }
   dialogVisible.value = true
   currentDir.value = ''
   fetchFiles('')
@@ -156,7 +183,7 @@ async function submitAddPath(fullPath, pathKind = 'file') {
       throw new Error(await parseErrorMessage(res, '添加失败'))
     }
 
-    ElMessage.success(pathKind === 'directory' ? '已添加目录到仓库列表' : '已添加到仓库列表')
+    ElMessage.success(pathKind === 'directory' ? '已添加目录并完成扫描' : '已添加到仓库列表')
     dialogVisible.value = false
     emitter.emit('refresh-repo', { repoId: props.repoId })
   } catch (e) {
@@ -212,10 +239,27 @@ watch(
 </script>
 
 <style scoped>
+.repo-iso-add-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .repo-iso-add {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.directory-add-caution {
+  max-width: 560px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #b45309;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .dir-entry {

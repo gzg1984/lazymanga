@@ -36,7 +36,69 @@ var defaultOSKeywordRules = []defaultOSKeywordRule{
 
 // DefaultNoopRuleBook returns a rule book that performs no relocation actions.
 func DefaultNoopRuleBook() RuleBook {
-	return RuleBook{Name: "noop", Version: "v1", Rules: []Rule{}}
+	return RuleBook{
+		Name:    "noop",
+		Version: "v1",
+		Scan:    ScanSpec{Extensions: []string{".iso"}},
+		Rules:   []Rule{},
+	}
+}
+
+// DefaultMangaFilesRuleBook scans common manga/archive document formats without relocation rules.
+func DefaultMangaFilesRuleBook() RuleBook {
+	return RuleBook{
+		Name:    "manga-files",
+		Version: "v1",
+		Scan: ScanSpec{
+			Extensions: []string{".cbz", ".cbr", ".zip", ".rar", ".7z", ".pdf"},
+			DirectoryRules: []DirectoryScanRule{{
+				Name:         "image-folder-as-volume",
+				Extensions:   []string{".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"},
+				MinFileCount: 10,
+			}},
+		},
+		Rules: []Rule{},
+	}
+}
+
+// DefaultKaritaMangaRuleBook keeps a clean directory title and writes captured metadata into a sidecar JSON file.
+func DefaultKaritaMangaRuleBook() RuleBook {
+	return RuleBook{
+		Name:    "karita-manga",
+		Version: "v1",
+		Scan: ScanSpec{
+			Extensions: []string{".cbz", ".cbr", ".zip", ".rar", ".7z", ".pdf"},
+			DirectoryRules: []DirectoryScanRule{{
+				Name:         "karita-folder",
+				Extensions:   []string{".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"},
+				MinFileCount: 10,
+				Transform: &DirectoryTransformSpec{
+					Pattern:            `^\[(?P<circle>[^\]]+)\]\s*(?P<title>.+?)(?:\s+\((?P<year>\d{4})\))?(?:\s+\[(?P<karita_id>\d+)\])?$`,
+					RecognizerName:     "karita-manga-filename",
+					RecognizerVersion:  "v1",
+					RenameTemplate:     `${title}`,
+					TargetPathTemplate: `${title}`,
+					MetadataFile:       ".karita.meta.json",
+					Metadata: map[string]string{
+						"title":           `${title}`,
+						"circle":          `${circle}`,
+						"circle_name":     `${circle_name}`,
+						"scanlator_group": `${scanlator_group}`,
+						"event_code":      `${event_code}`,
+						"comic_market":    `${comic_market}`,
+						"author_name":     `${author_name}`,
+						"author_alias":    `${author_alias}`,
+						"original_work":   `${original_work}`,
+						"year":            `${year}`,
+						"karita_id":       `${karita_id}`,
+						"source_path":     `${path}`,
+						"original_name":   `${original_name}`,
+					},
+				},
+			}},
+		},
+		Rules: []Rule{},
+	}
 }
 
 // DefaultOSRelocationRuleBook returns the compatibility rule book for current relocation behavior.
@@ -61,8 +123,8 @@ func DefaultOSRelocationRuleBook() RuleBook {
 			Priority: priority,
 			Enabled:  true,
 			Match: Condition{
-				IsOS:            boolPtr(true),
-				IsEntertainment: boolPtr(false),
+				IsOS:             boolPtr(true),
+				IsEntertainment:  boolPtr(false),
 				FileNameContains: r.Keywords,
 			},
 			Action: Action{TargetDir: r.TargetDir, RuleType: r.TypeName},
@@ -88,8 +150,8 @@ func DefaultOSRelocationRuleBook() RuleBook {
 			Priority: priority,
 			Enabled:  true,
 			Match: Condition{
-				IsOS:            boolPtr(false),
-				IsEntertainment: boolPtr(false),
+				IsOS:             boolPtr(false),
+				IsEntertainment:  boolPtr(false),
 				FileNameContains: r.Keywords,
 			},
 			Action: Action{TargetDir: r.TargetDir, RuleType: r.TypeName, InferIsOS: true},
@@ -97,7 +159,12 @@ func DefaultOSRelocationRuleBook() RuleBook {
 		priority += 10
 	}
 
-	return RuleBook{Name: "default-os-relocation", Version: "v1", Rules: rules}
+	return RuleBook{
+		Name:    "default-os-relocation",
+		Version: "v1",
+		Scan:    ScanSpec{Extensions: []string{".iso"}},
+		Rules:   rules,
+	}
 }
 
 func sanitizeRuleID(v string) string {

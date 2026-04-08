@@ -51,10 +51,17 @@
             <el-input-number v-model="form.sortOrder" :disabled="busy" :min="0" :max="999" />
 
             <label class="field-label">默认 RuleBook</label>
-            <div class="rulebook-row">
-              <el-input v-model="form.rulebookName" :disabled="busy" placeholder="rulebook_name" />
-              <el-input v-model="form.rulebookVersion" :disabled="busy" placeholder="v1" />
-            </div>
+            <RuleBookSelector
+              v-model:name="form.rulebookName"
+              v-model:version="form.rulebookVersion"
+              :disabled="busy"
+            />
+
+            <label class="field-label">手动编辑器</label>
+            <el-select v-model="form.manualEditorMode" :disabled="busy">
+              <el-option label="元数据编辑" value="metadata-editor" />
+              <el-option label="旧版类型编辑" value="legacy-type-editor" />
+            </el-select>
           </div>
 
           <div class="settings-box">
@@ -95,6 +102,7 @@
 import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import emitter from '../eventBus'
+import RuleBookSelector from './RuleBookSelector.vue'
 
 const dialogVisible = ref(false)
 const loading = ref(false)
@@ -125,6 +133,7 @@ function createEmptyForm() {
     showMD5: true,
     showSize: true,
     singleMove: true,
+    manualEditorMode: 'legacy-type-editor',
     rulebookName: 'noop',
     rulebookVersion: 'v1'
   }
@@ -175,6 +184,7 @@ function selectRepoType(item) {
     showMD5: !!item?.show_md5,
     showSize: !!item?.show_size,
     singleMove: !!item?.single_move,
+    manualEditorMode: item?.manual_editor_mode || 'legacy-type-editor',
     rulebookName: item?.rulebook_name || 'noop',
     rulebookVersion: item?.rulebook_version || 'v1'
   })
@@ -234,6 +244,7 @@ async function saveRepoType() {
       show_md5: !!form.showMD5,
       show_size: !!form.showSize,
       single_move: !!form.singleMove,
+      manual_editor_mode: String(form.manualEditorMode || '').trim() || 'legacy-type-editor',
       rulebook_name: String(form.rulebookName || '').trim(),
       rulebook_version: String(form.rulebookVersion || '').trim()
     }

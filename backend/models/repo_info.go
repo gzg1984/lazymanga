@@ -17,6 +17,7 @@ type RepoInfo struct {
 	ShowMD5              bool      `gorm:"not null;default:false" json:"show_md5"`
 	ShowSize             bool      `gorm:"not null;default:false" json:"show_size"`
 	SingleMove           bool      `gorm:"not null;default:false" json:"single_move"`
+	ManualEditorMode     string    `gorm:"column:manual_editor_mode;not null;default:legacy-type-editor;size:32" json:"manual_editor_mode"`
 	SchemaVersion        int       `gorm:"not null;default:1" json:"schema_version"`
 	FlagsJSON            string    `gorm:"not null;default:{}" json:"flags_json"`
 	SettingsOverrideJSON string    `gorm:"not null;default:{}" json:"settings_override_json"`

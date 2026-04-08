@@ -15,7 +15,7 @@
           </div>
           <div class="basic-repo-tip-line">
             <el-icon class="basic-repo-tip-icon"><WarningFilled /></el-icon>
-            <span>所有镜像需要</span>
+            <span>所有元素需要</span>
             <span class="basic-repo-tip-success">手工添加</span>
             <span>。</span>
           </div>

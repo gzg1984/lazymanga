@@ -1,22 +1,29 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="手动修改"
-    width="640px"
+    width="720px"
     @update:model-value="emit('update:modelValue', $event)"
   >
+    <template #header>
+      <div class="dialog-title-with-tip">
+        <span>信息</span>
+        <el-tooltip :content="editorModeDescription" placement="top" effect="dark">
+          <el-icon class="dialog-title-tip-icon"><WarningFilled /></el-icon>
+        </el-tooltip>
+      </div>
+    </template>
+
     <div class="manual-edit-content">
-      <p class="manual-edit-desc">设置类型和名字策略后，点击修改会提交到后端执行文件移动与记录更新。</p>
 
       <div class="manual-edit-meta">
-        <div><span class="meta-label">repoId:</span> {{ repoId }}</div>
-        <div><span class="meta-label">isoId:</span> {{ displayRecord?.id ?? '-' }}</div>
-        <div class="break-all"><span class="meta-label">path:</span> {{ displayRecord?.path || '-' }}</div>
-        <div class="break-all"><span class="meta-label">md5:</span> {{ displayRecord?.md5 || '（待计算）' }}</div>
+        <div><span class="meta-label">仓库 ID:</span> {{ repoId }}</div>
+        <div><span class="meta-label">要素 ID:</span> {{ displayRecord?.id ?? '-' }}</div>
+        <div class="break-all"><span class="meta-label">路径:</span> {{ displayRecord?.path || '-' }}</div>
+        <div v-if="!isDirectoryRecord" class="break-all"><span class="meta-label">MD5:</span> {{ displayRecord?.md5 || '（待计算）' }}</div>
         <div>
-          <span class="meta-label">文件大小:</span>
+          <span class="meta-label">{{ isDirectoryRecord ? '目录大小:' : '文件大小:' }}</span>
           {{ formatSizeHuman(displayRecord) }}
-          <span class="meta-sub">（{{ formatSizeBytes(displayRecord) }}）</span>
+          <span class="meta-sub">（{{ formatSizeBytes(displayRecord) }}<template v-if="isDirectoryRecord">，递归汇总</template>）</span>
         </div>
         <div>
           <span class="meta-label">文件状态:</span>
@@ -26,50 +33,169 @@
         </div>
       </div>
 
-      <div class="manual-edit-form">
-        <div class="form-row">
-          <el-checkbox :model-value="autoNormalizeEnabled" disabled>自动迁移路径（由仓库设置决定）</el-checkbox>
+      <div class="manual-info-panel">
+        <div class="panel-header">
+          <div class="panel-title-row">
+            <div class="form-label">{{ editMode ? editActionLabel : '当前信息' }}</div>
+            <span
+              v-if="editMode"
+              class="panel-title-hint"
+              :class="autoNormalizeEnabled ? 'is-enabled' : 'is-disabled'"
+            >
+              {{ autoRelocateHintText }}
+            </span>
+          </div>
+          <el-button
+            v-if="!editMode"
+            size="small"
+            type="primary"
+            plain
+            :disabled="submitting || !displayRecord?.id"
+            @click="enterEditMode"
+          >
+            {{ editActionLabel }}
+          </el-button>
         </div>
 
-        <div class="form-row">
-          <div class="form-label">类型</div>
-          <el-radio-group v-model="form.targetType" :disabled="submitting || !isoRecord">
-            <el-radio-button label="os">OS</el-radio-button>
-            <el-radio-button label="entertainment">娱乐</el-radio-button>
-            <el-radio-button label="others">Others</el-radio-button>
-          </el-radio-group>
-        </div>
+        <template v-if="editMode">
+          <div class="manual-edit-form inline-edit-form">
+            <div class="keyword-helper">
+              <div class="keyword-helper-header">
+                <div class="form-label">关键词列表</div>
+                <div class="keyword-helper-tip">
+                  {{ activeInputLabel ? `当前填充目标：${activeInputLabel}` : '先点下方任一输入框，再点这里的关键词即可快速填入' }}
+                </div>
+              </div>
+              <div v-if="keywordSuggestions.length" class="keyword-chip-list">
+                <el-tag
+                  v-for="keyword in keywordSuggestions"
+                  :key="`keyword-${keyword}`"
+                  class="keyword-chip"
+                  :type="activeInputLabel ? 'primary' : 'info'"
+                  effect="plain"
+                  round
+                  @mousedown.prevent
+                  @click="applyKeywordSuggestion(keyword)"
+                >
+                  {{ keyword }}
+                </el-tag>
+              </div>
+              <div v-else class="metadata-empty-hint">当前原始路径里还没有可提取的关键词。</div>
+            </div>
 
-        <div class="form-row">
-          <div class="form-label">修改名字</div>
-          <el-radio-group v-model="form.nameMode" :disabled="submitting || !isoRecord">
-            <el-radio label="auto">自动</el-radio>
-            <el-radio label="manual">手动</el-radio>
-          </el-radio-group>
-        </div>
+            <div v-if="!isMetadataEditor" class="form-row">
+              <div class="form-label">类型</div>
+              <el-radio-group v-model="form.targetType" :disabled="submitting || !isoRecord">
+                <el-radio-button label="os">OS</el-radio-button>
+                <el-radio-button label="entertainment">娱乐</el-radio-button>
+                <el-radio-button label="others">Others</el-radio-button>
+              </el-radio-group>
+            </div>
 
-        <div class="form-row" v-if="form.nameMode === 'manual'">
-          <div class="form-label">新名字</div>
-          <el-input
-            v-model="form.manualName"
-            :disabled="submitting || !isoRecord"
-            placeholder="输入新的文件名（必须以 .iso 结尾）"
-          />
-        </div>
+            <div v-if="!isMetadataEditor" class="form-row">
+              <div class="form-label">修改名字</div>
+              <el-radio-group v-model="form.nameMode" :disabled="submitting || !isoRecord">
+                <el-radio label="auto">自动</el-radio>
+                <el-radio label="manual">手动</el-radio>
+              </el-radio-group>
+            </div>
+
+            <div v-if="!isMetadataEditor && form.nameMode === 'manual'" class="form-row">
+              <div class="form-label">新名字</div>
+              <el-input
+                v-model="form.manualName"
+                :disabled="submitting || !isoRecord"
+                :placeholder="manualNamePlaceholder"
+                @focus="handleInputFocus('manual-name', '', '新名字', $event)"
+              />
+            </div>
+
+            <div v-if="isMetadataEditor" class="form-row">
+              <div class="form-label">元数据字段</div>
+
+              <div v-if="metadataEditorEntries.length" class="metadata-editor-grid">
+                <div v-for="entry in metadataEditorEntries" :key="`${displayRecord?.id || 'draft'}-${entry.key}`" class="metadata-editor-item">
+                  <div class="metadata-editor-label">{{ entry.label }}</div>
+                  <div v-if="entry.currentValue" class="metadata-editor-current">当前值：{{ entry.currentValue }}</div>
+                  <el-input
+                    v-model="metadataDraft[entry.key]"
+                    :disabled="submitting || !isoRecord"
+                    :placeholder="entry.currentValue || entry.placeholder"
+                    @focus="handleInputFocus('metadata', entry.key, entry.label, $event)"
+                  />
+                </div>
+              </div>
+
+              <div v-else class="metadata-empty-hint">当前记录还没有识别到可编辑 metadata，可先点“刷新”重新识别。</div>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div v-if="displayMetadataEntries.length" class="metadata-display-grid">
+            <div
+              v-for="entry in displayMetadataEntries"
+              :key="`view-${entry.key}`"
+              :class="['metadata-display-item', { 'is-title-item': entry.key === 'title' }]"
+            >
+              <div v-if="entry.key !== 'title'" class="metadata-display-label">{{ entry.label }}</div>
+              <div :class="['metadata-display-value', { 'is-title-value': entry.key === 'title' }]">{{ entry.value }}</div>
+            </div>
+          </div>
+          <div v-else class="metadata-empty-hint">当前记录还没有识别到可展示 metadata，可先点“刷新”重新识别。</div>
+        </template>
+
+        <details class="raw-path-collapse">
+          <summary class="raw-path-summary">原始数据</summary>
+          <div class="raw-path-body">
+            <div v-if="rawPathEntries.length" class="raw-path-grid">
+              <div v-for="entry in rawPathEntries" :key="`raw-${entry.key}`" class="metadata-display-item raw-path-item">
+                <div class="raw-path-item-header">
+                  <div class="metadata-display-label">{{ entry.label }}</div>
+                  <el-button
+                    v-if="entry.key === 'source_path' && canForceRestoreOriginalPath"
+                    class="raw-path-action"
+                    size="small"
+                    type="danger"
+                    plain
+                    :loading="restoringOriginalPath"
+                    :disabled="submitting || refreshing"
+                    @click="forceRestoreOriginalPath"
+                  >
+                    强制恢复到原始路径
+                  </el-button>
+                </div>
+                <div class="metadata-display-value">{{ entry.value }}</div>
+              </div>
+            </div>
+            <div v-else class="metadata-empty-hint">当前记录暂时没有额外的原始路径数据。</div>
+          </div>
+        </details>
       </div>
     </div>
 
     <template #footer>
       <el-button :disabled="submitting" @click="emit('update:modelValue', false)">关闭</el-button>
+      <el-button v-if="editMode" :disabled="submitting" @click="exitEditMode">返回查看</el-button>
       <el-button :loading="refreshing" :disabled="submitting || !displayRecord?.id" @click="refreshRecordMetadata">刷新</el-button>
-      <el-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="submitManualEdit">修改</el-button>
+      <el-button
+        v-if="!editMode"
+        type="primary"
+        plain
+        :disabled="submitting || !displayRecord?.id"
+        @click="enterEditMode"
+      >
+        {{ editActionLabel }}
+      </el-button>
+      <el-button v-if="editMode" type="primary" :loading="submitting" :disabled="!canSubmit" @click="submitManualEdit">修改</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { WarningFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import emitter from '../eventBus'
 
 const props = defineProps({
@@ -91,24 +217,556 @@ const emit = defineEmits(['update:modelValue'])
 
 const submitting = ref(false)
 const refreshing = ref(false)
+const restoringOriginalPath = ref(false)
 const displayRecord = ref(null)
 const autoNormalizeEnabled = ref(false)
+const repoInfo = ref(null)
+const editMode = ref(false)
+const metadataDraft = ref({})
+const activeInputTarget = ref(null)
+const activeInputElement = ref(null)
+const preferredMetadataKeys = [
+  'title',
+  'series_name',
+  'scanlator_group',
+  'author_name',
+  'author_alias',
+  'original_work',
+  'event_code',
+  'comic_market',
+  'year',
+  'karita_id'
+]
+
 const form = reactive({
   targetType: 'os',
   nameMode: 'auto',
   manualName: ''
 })
 
+function inferFileExtension(name) {
+  const match = String(name || '').trim().match(/(\.[^.\\/]+)$/)
+  return match ? match[1].toLowerCase() : ''
+}
+
+function inferCurrentName(path, fallbackName) {
+  const name = String(fallbackName || '').trim()
+  if (name) return name
+  const normalized = String(path || '').replace(/\\/g, '/').trim()
+  if (!normalized) return ''
+  const parts = normalized.split('/')
+  return parts[parts.length - 1] || ''
+}
+
+function inferTargetTypeFromRecord(record) {
+  if (record?.is_entertament && !record?.is_os) {
+    return 'entertainment'
+  }
+  if (record?.is_os && !record?.is_entertament) {
+    return 'os'
+  }
+  return 'others'
+}
+
+function normalizeMetadataValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean).join(' / ')
+  }
+  if (value === null || value === undefined) {
+    return ''
+  }
+  if (typeof value === 'object') {
+    return ''
+  }
+  return String(value).trim()
+}
+
+function metadataFieldLabel(key) {
+  const mapping = {
+    title: '标题',
+    series_name: '系列名字',
+    scanlator_group: '汉化组',
+    author_name: '作者',
+    author_alias: '作者别名',
+    original_work: '原作',
+    comic_market: 'Comic Market',
+    event_code: '活动编号',
+    circle: '社团',
+    circle_name: '社团名',
+    year: '年份',
+    karita_id: 'Karita ID',
+    relative_path: '相对路径',
+    source_path: '来源路径',
+    path_parts: '路径拆分',
+    original_name: '原始名称'
+  }
+  return mapping[key] || key
+}
+
+function shouldExposeMetadataField(key, normalizedValue) {
+  const normalizedKey = String(key || '').trim()
+  if (!normalizedKey || normalizedKey.startsWith('_')) {
+    return false
+  }
+  if (normalizedKey === 'path_parts' || normalizedKey === 'source_path' || normalizedKey === 'original_name') {
+    return false
+  }
+  return normalizedValue !== ''
+}
+
+function extractRowMetadata(item) {
+  if (item?.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)) {
+    return item.metadata
+  }
+
+  const raw = String(item?.metadata_json || item?.metadataJson || '').trim()
+  if (!raw || raw === '{}') {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed
+    }
+  } catch (_) {
+    // ignore invalid metadata json
+  }
+  return {}
+}
+
+function resolveManualEditorMode(info, record) {
+  const rawMode = String(info?.manual_editor_mode || info?.manualEditorMode || '').trim().toLowerCase()
+  if (rawMode === 'metadata-editor' || rawMode === 'metadata') {
+    return 'metadata-editor'
+  }
+  if (rawMode === 'legacy-type-editor' || rawMode === 'legacy') {
+    return 'legacy-type-editor'
+  }
+
+  const repoTypeKey = String(info?.repo_type_key || info?.repoTypeKey || '').trim().toLowerCase()
+  if (repoTypeKey === 'manga' || repoTypeKey === 'karita-manga') {
+    return 'metadata-editor'
+  }
+
+  const metadata = extractRowMetadata(record)
+  if (Object.keys(metadata).length > 0 && !!(record?.is_directory ?? record?.isDirectory)) {
+    return 'metadata-editor'
+  }
+
+  return 'legacy-type-editor'
+}
+
+function resetMetadataDraft() {
+  metadataDraft.value = {}
+}
+
+function resolveMetadataSourceRecord() {
+  if (displayRecord.value) {
+    return displayRecord.value
+  }
+  return props.isoRecord || null
+}
+
+function syncMetadataDraft() {
+  const nextDraft = {}
+  if (!isMetadataEditor.value) {
+    metadataDraft.value = nextDraft
+    return
+  }
+
+  const metadata = extractRowMetadata(resolveMetadataSourceRecord())
+  for (const entry of metadataEditorEntries.value) {
+    nextDraft[entry.key] = normalizeMetadataValue(metadata[entry.key] ?? entry.currentValue)
+  }
+  metadataDraft.value = nextDraft
+}
+
+function buildMetadataPayload() {
+  const base = { ...extractRowMetadata(resolveMetadataSourceRecord()) }
+  const draft = metadataDraft.value || {}
+  for (const entry of metadataEditorEntries.value) {
+    const value = String(draft[entry.key] || '').trim()
+    base[entry.key] = value
+  }
+  return base
+}
+
+function tokenizeKeywordText(value) {
+  const extensionLikeTokens = new Set(['zip', 'rar', '7z', 'cbz', 'cbr', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'json', 'db', 'txt'])
+  return String(value ?? '')
+    .split(/[/\\\s()[\]{}<>【】（）「」『』《》|｜,，、;；:：_+=~!@#$%^&*?'"`.-]+/u)
+    .map((item) => item.trim())
+    .filter((item) => {
+      if (!item) return false
+      const lower = item.toLowerCase()
+      if (extensionLikeTokens.has(lower)) return false
+      if (!/[A-Za-z0-9\u4e00-\u9fff]/.test(item)) return false
+      const hasCjk = /[\u4e00-\u9fff]/.test(item)
+      if (!hasCjk && item.length < 2 && !/[A-Za-z]+\d+|\d+[A-Za-z]+|\d{4}/.test(item)) {
+        return false
+      }
+      return item.length <= 40
+    })
+}
+
+function handleInputFocus(scope, key, label, event) {
+  activeInputTarget.value = { scope, key, label }
+  activeInputElement.value = event?.target || null
+}
+
+function assignActiveInputValue(value) {
+  const target = activeInputTarget.value
+  if (!target) {
+    return
+  }
+  if (target.scope === 'manual-name') {
+    form.manualName = value
+    return
+  }
+  if (target.scope === 'metadata' && target.key) {
+    metadataDraft.value[target.key] = value
+  }
+}
+
+function buildKeywordInsertedValue(currentValue, keyword, inputElement) {
+  const current = String(currentValue ?? '')
+  const nextKeyword = String(keyword || '').trim()
+  if (!nextKeyword) {
+    return { value: current, cursor: current.length }
+  }
+
+  if (!inputElement || typeof inputElement.selectionStart !== 'number' || typeof inputElement.selectionEnd !== 'number') {
+    const trimmedCurrent = current.trim()
+    const value = trimmedCurrent ? `${trimmedCurrent} ${nextKeyword}` : nextKeyword
+    return { value, cursor: value.length }
+  }
+
+  const start = inputElement.selectionStart
+  const end = inputElement.selectionEnd
+  const before = current.slice(0, start)
+  const after = current.slice(end)
+  const needsLeadingSpace = !!before && !/[\s/|（(【]$/.test(before)
+  const needsTrailingSpace = !!after && !/^[\s/|）)】]/.test(after)
+  const insertion = `${needsLeadingSpace ? ' ' : ''}${nextKeyword}${needsTrailingSpace ? ' ' : ''}`
+  return {
+    value: `${before}${insertion}${after}`,
+    cursor: before.length + insertion.length
+  }
+}
+
+async function applyKeywordSuggestion(keyword) {
+  if (!activeInputTarget.value) {
+    ElMessage.info('请先点击一个输入框，再点关键词')
+    return
+  }
+
+  const target = activeInputTarget.value
+  const currentValue = target.scope === 'manual-name'
+    ? form.manualName
+    : metadataDraft.value?.[target.key] || ''
+  const { value, cursor } = buildKeywordInsertedValue(currentValue, keyword, activeInputElement.value)
+  assignActiveInputValue(value)
+
+  await nextTick()
+  if (activeInputElement.value?.focus) {
+    activeInputElement.value.focus()
+    if (typeof activeInputElement.value.setSelectionRange === 'function') {
+      activeInputElement.value.setSelectionRange(cursor, cursor)
+    }
+  }
+}
+
+function formatTargetTypeLabel(value) {
+  const mapping = {
+    os: 'OS',
+    entertainment: '娱乐',
+    others: 'Others'
+  }
+  return mapping[value] || String(value || '（未设置）')
+}
+
+function formatChangeValue(value) {
+  const normalized = normalizeMetadataValue(value)
+  return normalized || '（空）'
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function collectPendingChanges() {
+  const changes = []
+  const record = resolveMetadataSourceRecord()
+  if (!record) {
+    return changes
+  }
+
+  if (!isMetadataEditor.value) {
+    const currentType = inferTargetTypeFromRecord(record)
+    if (form.targetType !== currentType) {
+      changes.push({
+        label: '类型',
+        before: formatTargetTypeLabel(currentType),
+        after: formatTargetTypeLabel(form.targetType)
+      })
+    }
+  }
+
+  if (form.nameMode === 'manual') {
+    changes.push({
+      label: '名字模式',
+      before: '自动',
+      after: '手动'
+    })
+    const currentName = inferCurrentName(record?.path, record?.filename)
+    const nextName = form.manualName.trim()
+    if (nextName !== currentName) {
+      changes.push({
+        label: '新名字',
+        before: formatChangeValue(currentName),
+        after: formatChangeValue(nextName)
+      })
+    }
+  }
+
+  if (isMetadataEditor.value) {
+    const metadata = extractRowMetadata(record)
+    for (const entry of metadataEditorEntries.value) {
+      const before = normalizeMetadataValue(metadata[entry.key])
+      const after = normalizeMetadataValue(metadataDraft.value?.[entry.key])
+      if (before === after) {
+        continue
+      }
+      changes.push({
+        label: entry.label,
+        before: formatChangeValue(before),
+        after: formatChangeValue(after)
+      })
+    }
+  }
+
+  return changes
+}
+
+async function confirmPendingChanges() {
+  const changes = collectPendingChanges()
+  const message = changes.length > 0
+    ? [
+        '<div style="line-height:1.7">',
+        '<div style="margin-bottom:8px;font-weight:600;">即将提交以下修改：</div>',
+        ...changes.map((change, index) => `<div>${index + 1}. <strong>${escapeHtml(change.label)}</strong>：${escapeHtml(change.before)} → ${escapeHtml(change.after)}</div>`),
+        '</div>'
+      ].join('')
+    : '当前没有检测到明确的字段变化，仍要继续提交吗？'
+
+  try {
+    await ElMessageBox.confirm(message, '确认修改', {
+      type: 'warning',
+      confirmButtonText: '确认修改',
+      cancelButtonText: '取消',
+      dangerouslyUseHTMLString: changes.length > 0
+    })
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+const isDirectoryRecord = computed(() => !!(displayRecord.value?.is_directory ?? displayRecord.value?.isDirectory))
+const currentRecordExt = computed(() => inferFileExtension(inferCurrentName(displayRecord.value?.path, displayRecord.value?.filename)))
+const editorMode = computed(() => resolveManualEditorMode(repoInfo.value, displayRecord.value))
+const isMetadataEditor = computed(() => editorMode.value === 'metadata-editor')
+
+const displayMetadataEntries = computed(() => {
+  const metadata = extractRowMetadata(resolveMetadataSourceRecord())
+  const keys = new Set(preferredMetadataKeys)
+  for (const key of Object.keys(metadata)) {
+    const normalizedValue = normalizeMetadataValue(metadata[key])
+    if (!shouldExposeMetadataField(key, normalizedValue)) {
+      continue
+    }
+    keys.add(key)
+  }
+
+  return Array.from(keys)
+    .map((key) => {
+      const value = normalizeMetadataValue(metadata[key])
+      return {
+        key,
+        label: metadataFieldLabel(key),
+        value
+      }
+    })
+    .filter((entry) => !!entry.value)
+})
+
+const rawPathEntries = computed(() => {
+  const metadata = extractRowMetadata(resolveMetadataSourceRecord())
+  const rawKeys = ['source_path', 'relative_path', 'path_parts', 'original_name']
+
+  return rawKeys
+    .map((key) => ({
+      key,
+      label: metadataFieldLabel(key),
+      value: normalizeMetadataValue(metadata[key])
+    }))
+    .filter((entry) => !!entry.value)
+})
+
+const metadataEditorEntries = computed(() => {
+  if (!isMetadataEditor.value) {
+    return []
+  }
+
+  const metadata = extractRowMetadata(resolveMetadataSourceRecord())
+  const keys = new Set(preferredMetadataKeys)
+  for (const key of Object.keys(metadata)) {
+    const normalizedValue = normalizeMetadataValue(metadata[key])
+    if (!shouldExposeMetadataField(key, normalizedValue)) {
+      continue
+    }
+    keys.add(key)
+  }
+
+  return Array.from(keys)
+    .filter((key) => !String(key || '').startsWith('_'))
+    .map((key) => ({
+      key,
+      label: metadataFieldLabel(key),
+      placeholder: `填写${metadataFieldLabel(key)}`,
+      currentValue: normalizeMetadataValue(metadata[key])
+    }))
+})
+
+const storedSourcePath = computed(() => rawPathEntries.value.find((entry) => entry.key === 'source_path')?.value || '')
+const canForceRestoreOriginalPath = computed(() => isDirectoryRecord.value && !!displayRecord.value?.id && !!storedSourcePath.value)
+const keywordSuggestions = computed(() => {
+  const record = resolveMetadataSourceRecord()
+  const metadata = extractRowMetadata(record)
+  const sourceValues = [
+    record?.path,
+    record?.filename,
+    metadata?.source_path,
+    metadata?.relative_path,
+    normalizeMetadataValue(metadata?.path_parts),
+    metadata?.original_name
+  ]
+
+  const seen = new Set()
+  const results = []
+  for (const source of sourceValues) {
+    for (const token of tokenizeKeywordText(source)) {
+      const normalized = token.toLowerCase()
+      if (seen.has(normalized)) {
+        continue
+      }
+      seen.add(normalized)
+      results.push(token)
+      if (results.length >= 24) {
+        return results
+      }
+    }
+  }
+  return results
+})
+const activeInputLabel = computed(() => activeInputTarget.value?.label || '')
+
 const manualNameLooksValid = computed(() => {
   if (form.nameMode !== 'manual') return true
   const value = form.manualName.trim()
-  return value !== '' && /\.iso$/i.test(value)
+  if (value === '') return false
+
+  const currentExt = currentRecordExt.value
+  if (!currentExt) return true
+
+  const manualExt = inferFileExtension(value)
+  return manualExt === '' || manualExt === currentExt
 })
+
+const manualNamePlaceholder = computed(() => {
+  if (currentRecordExt.value) {
+    return `输入新的文件名（可省略后缀，将自动保留 ${currentRecordExt.value}）`
+  }
+  return isDirectoryRecord.value ? '输入新的目录名' : '输入新的文件名'
+})
+
+function buildMetadataDrivenManualName(titleValue) {
+  let nextName = String(titleValue || '').trim()
+  if (!nextName) {
+    return ''
+  }
+
+  const currentExt = currentRecordExt.value
+  if (!currentExt) {
+    return nextName
+  }
+
+  const providedExt = inferFileExtension(nextName)
+  if (providedExt && providedExt !== currentExt) {
+    nextName = nextName.slice(0, -providedExt.length).trim()
+  }
+  if (inferFileExtension(nextName) === currentExt) {
+    return nextName
+  }
+  return `${nextName}${currentExt}`
+}
+
+function resolveMetadataEditorRenamePayload() {
+  if (!isMetadataEditor.value) {
+    return {
+      nameMode: form.nameMode,
+      manualName: form.manualName.trim()
+    }
+  }
+
+  if (isDirectoryRecord.value) {
+    return {
+      nameMode: 'auto',
+      manualName: ''
+    }
+  }
+
+  const metadata = extractRowMetadata(resolveMetadataSourceRecord())
+  const currentTitle = normalizeMetadataValue(metadata?.title)
+  const nextTitle = normalizeMetadataValue(metadataDraft.value?.title)
+  if (!nextTitle || nextTitle === currentTitle) {
+    return {
+      nameMode: 'auto',
+      manualName: ''
+    }
+  }
+
+  return {
+    nameMode: 'manual',
+    manualName: buildMetadataDrivenManualName(nextTitle)
+  }
+}
 
 const canSubmit = computed(() => {
   if (!displayRecord.value?.id) return false
   if (!manualNameLooksValid.value) return false
   return true
+})
+
+const editActionLabel = computed(() => (isMetadataEditor.value ? '修改元数据' : '修改信息'))
+const autoRelocateHintText = computed(() => (
+  autoNormalizeEnabled.value ? '修改后会自动更新目录路径' : '修改后不会自动更新目录路径'
+))
+
+const editorModeDescription = computed(() => {
+  if (isMetadataEditor.value && !editMode.value) {
+    return '当前先展示识别结果；点击“修改元数据”后可直接修改标题、汉化组、作者、原作等字段，其中标题会作为名字来源。'
+  }
+  if (isMetadataEditor.value) {
+    return '当前已进入“元数据编辑”模式；直接改标题就会按新标题更新目录/文件名，不改标题则保持自动结果。上方关键词也能快速填入当前聚焦的输入框。'
+  }
+  return editMode.value ? '设置类型和名字策略后，点击修改会先给出变更确认，再提交到后端执行更新。' : '当前先展示这条记录的信息；如需调整，再进入修改模式。'
 })
 
 function parseSizeBytes(v) {
@@ -149,30 +807,28 @@ function formatSizeBytes(v) {
   return `${Math.round(size)} B`
 }
 
-function inferTargetTypeFromRecord(record) {
-  if (record?.is_entertament && !record?.is_os) {
-    return 'entertainment'
-  }
-  if (record?.is_os && !record?.is_entertament) {
-    return 'os'
-  }
-  return 'others'
-}
-
-function inferCurrentName(path, fallbackName) {
-  const name = String(fallbackName || '').trim()
-  if (name) return name
-  const normalized = String(path || '').replace(/\\/g, '/').trim()
-  if (!normalized) return ''
-  const parts = normalized.split('/')
-  return parts[parts.length - 1] || ''
-}
-
 function resetFormFromRecord() {
   displayRecord.value = props.isoRecord ? { ...props.isoRecord } : null
+  editMode.value = false
+  activeInputTarget.value = null
+  activeInputElement.value = null
   form.targetType = inferTargetTypeFromRecord(displayRecord.value)
   form.nameMode = 'auto'
   form.manualName = inferCurrentName(displayRecord.value?.path, displayRecord.value?.filename)
+  syncMetadataDraft()
+}
+
+function enterEditMode() {
+  editMode.value = true
+  activeInputTarget.value = null
+  activeInputElement.value = null
+  syncMetadataDraft()
+}
+
+function exitEditMode() {
+  editMode.value = false
+  activeInputTarget.value = null
+  activeInputElement.value = null
 }
 
 async function parseErrorMessage(res, fallback) {
@@ -197,9 +853,10 @@ async function parseErrorMessage(res, fallback) {
   return `${fallback} (HTTP ${res.status})`
 }
 
-async function fetchRepoInfoFlag() {
+async function fetchRepoInfoState() {
   if (!props.repoId) {
     autoNormalizeEnabled.value = false
+    repoInfo.value = null
     return
   }
 
@@ -210,29 +867,93 @@ async function fetchRepoInfoFlag() {
     }
 
     const data = await res.json()
+    repoInfo.value = data
     autoNormalizeEnabled.value = !!data?.auto_normalize
+    syncMetadataDraft()
   } catch (e) {
     autoNormalizeEnabled.value = false
+    repoInfo.value = null
     ElMessage.error(e.message || '获取 repo info 失败')
+  }
+}
+
+async function forceRestoreOriginalPath() {
+  if (!canForceRestoreOriginalPath.value) {
+    ElMessage.error('当前记录没有可恢复的原始路径')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `将把当前目录强制恢复到存储的原始路径：\n${storedSourcePath.value}\n\n缺少的上级目录会自动创建。`,
+      '确认恢复',
+      {
+        type: 'warning',
+        confirmButtonText: '强制恢复',
+        cancelButtonText: '取消'
+      }
+    )
+  } catch (_) {
+    return
+  }
+
+  restoringOriginalPath.value = true
+  try {
+    const res = await fetch(`/api/repos/${props.repoId}/repoisos/${displayRecord.value.id}/manual-edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force_restore_source_path: true })
+    })
+    if (!res.ok) {
+      throw new Error(await parseErrorMessage(res, '恢复原始路径失败'))
+    }
+
+    const data = await res.json()
+    if (data?.record) {
+      displayRecord.value = { ...data.record }
+      syncMetadataDraft()
+    }
+    editMode.value = false
+    emitter.emit('refresh-repo', { repoId: props.repoId })
+    ElMessage.success(data?.moved === false ? '当前已在原始路径，无需恢复' : '已强制恢复到原始路径')
+  } catch (e) {
+    ElMessage.error(e.message || '恢复原始路径失败')
+  } finally {
+    restoringOriginalPath.value = false
   }
 }
 
 async function submitManualEdit() {
   if (!displayRecord.value?.id) {
-    ElMessage.error('缺少ISO记录信息，无法修改')
+    ElMessage.error('缺少记录信息，无法修改')
     return
   }
   if (!manualNameLooksValid.value) {
-    ElMessage.error('手动模式下，新名字必须以 .iso 结尾')
+    if (!form.manualName.trim()) {
+      ElMessage.error('手动模式下，请填写新名字')
+    } else if (currentRecordExt.value) {
+      ElMessage.error(`手动模式下，新名字需保留 ${currentRecordExt.value} 后缀`)
+    } else {
+      ElMessage.error('手动模式下，新名字格式无效')
+    }
+    return
+  }
+
+  const confirmed = await confirmPendingChanges()
+  if (!confirmed) {
     return
   }
 
   submitting.value = true
   try {
+    const renamePayload = resolveMetadataEditorRenamePayload()
     const payload = {
       target_type: form.targetType,
-      name_mode: form.nameMode,
-      manual_name: form.manualName.trim()
+      name_mode: renamePayload.nameMode,
+      manual_name: renamePayload.manualName
+    }
+    if (isMetadataEditor.value) {
+      payload.metadata = buildMetadataPayload()
     }
 
     const res = await fetch(`/api/repos/${props.repoId}/repoisos/${displayRecord.value.id}/manual-edit`, {
@@ -246,7 +967,7 @@ async function submitManualEdit() {
 
     await res.json()
     emitter.emit('refresh-repo', { repoId: props.repoId })
-    ElMessage.success('手动修改已提交')
+    ElMessage.success(isMetadataEditor.value ? '元数据修改已提交' : '手动修改已提交')
     emit('update:modelValue', false)
   } catch (e) {
     ElMessage.error(e.message || '手动修改失败')
@@ -257,7 +978,7 @@ async function submitManualEdit() {
 
 async function refreshRecordMetadata() {
   if (!displayRecord.value?.id) {
-    ElMessage.error('缺少ISO记录信息，无法刷新')
+    ElMessage.error('缺少记录信息，无法刷新')
     return
   }
 
@@ -273,6 +994,7 @@ async function refreshRecordMetadata() {
     const data = await res.json()
     if (data?.record) {
       displayRecord.value = { ...data.record }
+      syncMetadataDraft()
     }
 
     emitter.emit('refresh-repo', { repoId: props.repoId })
@@ -283,16 +1005,16 @@ async function refreshRecordMetadata() {
     }
 
     const parts = []
-    if (data?.path_moved) parts.push('路径重定位')
+    if (data?.path_moved) parts.push(isDirectoryRecord.value ? '路径识别/重命名' : '路径重定位')
     if (data?.md5_updated) parts.push('md5')
-    if (data?.size_updated) parts.push('文件大小')
+    if (data?.size_updated) parts.push(isDirectoryRecord.value ? '目录大小' : '文件大小')
 
     if (parts.length > 0) {
       ElMessage.success(`刷新完成，已补充：${parts.join('、')}`)
       return
     }
 
-    ElMessage.info('文件存在，md5和文件大小均已存在')
+    ElMessage.info(isDirectoryRecord.value ? '目录存在，已完成路径识别检查与大小刷新' : '文件存在，md5和文件大小均已存在')
   } catch (e) {
     ElMessage.error(e.message || '刷新失败')
   } finally {
@@ -305,8 +1027,14 @@ watch(
   (visible) => {
     if (visible) {
       resetFormFromRecord()
-      fetchRepoInfoFlag()
+      fetchRepoInfoState()
+      return
     }
+    repoInfo.value = null
+    editMode.value = false
+    activeInputTarget.value = null
+    activeInputElement.value = null
+    resetMetadataDraft()
   }
 )
 
@@ -314,23 +1042,49 @@ watch(
   () => props.repoId,
   () => {
     autoNormalizeEnabled.value = false
+    repoInfo.value = null
     if (props.modelValue) {
-      fetchRepoInfoFlag()
+      fetchRepoInfoState()
     }
   }
 )
+
+watch(
+  () => props.isoRecord,
+  () => {
+    if (props.modelValue) {
+      resetFormFromRecord()
+    }
+  },
+  { deep: true }
+)
+
+watch(editorMode, () => {
+  if (props.modelValue) {
+    syncMetadataDraft()
+  }
+})
 </script>
 
 <style scoped>
+.dialog-title-with-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.dialog-title-tip-icon {
+  color: #d97706;
+  font-size: 14px;
+  cursor: help;
+}
+
 .manual-edit-content {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.manual-edit-desc {
-  color: #475569;
-  font-size: 14px;
 }
 
 .manual-edit-meta {
@@ -364,6 +1118,12 @@ watch(
   background: #ffffff;
 }
 
+.inline-edit-form {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .form-row {
   display: flex;
   flex-direction: column;
@@ -374,6 +1134,186 @@ watch(
   font-size: 14px;
   font-weight: 600;
   color: #334155;
+}
+
+.manual-info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.panel-title-hint {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.panel-title-hint.is-enabled {
+  color: #0f766e;
+}
+
+.panel-title-hint.is-disabled {
+  color: #64748b;
+}
+
+.metadata-display-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.metadata-display-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.metadata-display-item.is-title-item {
+  grid-column: 1 / -1;
+  background: #ffffff;
+}
+
+.raw-path-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.raw-path-action {
+  margin-left: auto;
+}
+
+.metadata-display-label {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.metadata-display-value {
+  font-size: 14px;
+  color: #0f172a;
+  word-break: break-word;
+}
+
+.metadata-display-value.is-title-value {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.keyword-helper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed #cbd5e1;
+  background: #f8fafc;
+}
+
+.keyword-helper-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.keyword-helper-tip {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.keyword-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.keyword-chip {
+  cursor: pointer;
+  user-select: none;
+}
+
+.metadata-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.metadata-editor-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metadata-editor-label {
+  font-size: 13px;
+  color: #334155;
+  font-weight: 600;
+}
+
+.metadata-editor-current {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.raw-path-collapse {
+  margin-top: 6px;
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 10px;
+}
+
+.raw-path-summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.raw-path-body {
+  margin-top: 10px;
+}
+
+.raw-path-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.raw-path-item {
+  background: #fffdf5;
+}
+
+.metadata-empty-hint {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 13px;
 }
 
 .status-ok {

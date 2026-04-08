@@ -61,7 +61,7 @@ func (s OSRelocationStep) Process(repoID uint, repoDB *gorm.DB, rootAbs string, 
 	if err != nil {
 		return err
 	}
-	if !autoNormalizeEnabled {
+	if !autoNormalizeEnabled || record.IsDirectory {
 		return nil
 	}
 
@@ -197,6 +197,7 @@ func relocateFileWithUniqueTarget(sourceAbs string, targetAbs string, rootAbs st
 	if err := moveFileWithFallback(sourceAbs, finalTargetAbs); err != nil {
 		return "", "", false, err
 	}
+	cleanupEmptyParentDirectories(rootAbs, sourceAbs)
 
 	rel, err := filepath.Rel(rootAbs, finalTargetAbs)
 	if err != nil {

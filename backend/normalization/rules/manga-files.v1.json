@@ -1,0 +1,15 @@
+{
+  "name": "manga-files",
+  "version": "v1",
+  "scan": {
+    "extensions": [".cbz", ".cbr", ".zip", ".rar", ".7z", ".pdf"],
+    "directory_rules": [
+      {
+        "name": "image-folder-as-volume",
+        "extensions": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"],
+        "min_file_count": 5
+      }
+    ]
+  },
+  "rules": []
+}

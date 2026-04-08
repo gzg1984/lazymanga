@@ -14,15 +14,6 @@
             <div class="info-row"><span class="info-label">Name</span><span>{{ repoInfo.name || '-' }}</span></div>
             <div class="info-row"><span class="info-label">Repo Type</span><span>{{ repoInfo.repo_type_key || '-' }}</span></div>
             <div class="info-row"><span class="info-label">Schema Version</span><span>{{ repoInfo.schema_version }}</span></div>
-            <div class="info-row"><span class="info-label">Created At</span><span>{{ repoInfo.created_at || '-' }}</span></div>
-            <div class="info-row"><span class="info-label">Updated At</span><span>{{ repoInfo.updated_at || '-' }}</span></div>
-            <div class="info-row"><span class="info-label">RuleBook Name</span><span>{{ effectiveRuleBookName }}</span></div>
-            <div class="info-row"><span class="info-label">RuleBook Version</span><span>{{ effectiveRuleBookVersion }}</span></div>
-            <div class="info-row"><span class="info-label">RuleBook Source</span><span>{{ ruleBookSource }}</span></div>
-            <div v-if="ruleBookBindingError" class="info-row">
-              <span class="info-label">RuleBook Error</span>
-              <span class="text-red-600">{{ ruleBookBindingError }}</span>
-            </div>
           </div>
 
           <div class="mt-4">
@@ -45,6 +36,22 @@
                   </div>
                 </div>
                 <div v-else class="empty-tip">暂无额外时间记录。</div>
+              </el-tab-pane>
+
+              <el-tab-pane label="规则书" name="rulebook">
+                <div v-if="ruleBookEntries.length" class="tab-section-list">
+                  <div v-for="entry in ruleBookEntries" :key="entry.key" class="detail-row">
+                    <div class="detail-title">{{ entry.label }}</div>
+                    <template v-if="entry.multiline">
+                      <pre class="other-code">{{ entry.display }}</pre>
+                    </template>
+                    <template v-else>
+                      <div class="detail-value" :class="{ 'detail-error': entry.error }">{{ entry.display }}</div>
+                    </template>
+                    <div v-if="entry.hint" class="detail-hint">{{ entry.hint }}</div>
+                  </div>
+                </div>
+                <div v-else class="empty-tip">暂无规则书信息。</div>
               </el-tab-pane>
 
               <el-tab-pane label="其他" name="others">
@@ -130,6 +137,68 @@ const ruleBookSource = computed(() => {
   return repoRuleBookBinding.value?.binding_source || (repoRuleBookBinding.value ? 'repo binding api' : 'flags_json fallback')
 })
 
+const ruleBookEntries = computed(() => {
+  const entries = [
+    {
+      key: 'rulebook_name_effective',
+      label: '当前 RuleBook 名称',
+      display: effectiveRuleBookName.value,
+      hint: '优先显示仓库绑定结果，缺失时回退到 flags_json。'
+    },
+    {
+      key: 'rulebook_version_effective',
+      label: '当前 RuleBook 版本',
+      display: effectiveRuleBookVersion.value,
+      hint: '这里展示当前实际生效的规则书版本。'
+    },
+    {
+      key: 'rulebook_source_effective',
+      label: 'RuleBook 来源',
+      display: ruleBookSource.value,
+      hint: '用于说明当前规则书配置来自绑定接口还是 flags 回退。'
+    }
+  ]
+
+  Object.keys(parsedFlags.value)
+    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
+    .forEach((key) => {
+      if (!isRuleBookKey(key)) {
+        return
+      }
+
+      const value = parsedFlags.value[key]
+      entries.push({
+        key: `flag_${key}`,
+        label: humanizeRuleBookLabel(key),
+        display: formatOtherValue(value),
+        multiline: typeof value === 'object' && value !== null,
+        hint: '这是 repo_info.flags_json 中保存的规则书相关字段。'
+      })
+    })
+
+  if (repoRuleBookBinding.value && Object.keys(repoRuleBookBinding.value).length) {
+    entries.push({
+      key: 'rulebook_binding_payload',
+      label: '绑定详情',
+      display: JSON.stringify(repoRuleBookBinding.value, null, 2),
+      multiline: true,
+      hint: '这是 `/rulebook/binding` 接口返回的完整信息。'
+    })
+  }
+
+  if (ruleBookBindingError.value) {
+    entries.push({
+      key: 'rulebook_binding_error',
+      label: '绑定接口错误',
+      display: ruleBookBindingError.value,
+      hint: '接口不可用时，会继续使用已有回退配置。',
+      error: true
+    })
+  }
+
+  return entries
+})
+
 const boolEntries = computed(() => {
   const info = repoInfo.value || {}
   return [
@@ -166,7 +235,7 @@ const timeEntries = computed(() => {
   }
 
   Object.entries(parsedFlags.value).forEach(([key, value]) => {
-    if (!looksLikeTimeEntry(key, value)) return
+    if (isRuleBookKey(key) || !looksLikeTimeEntry(key, value)) return
     entries.push({
       key,
       label: humanizeTimeLabel(key),
@@ -194,7 +263,7 @@ const otherEntries = computed(() => {
     .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
     .forEach((key) => {
       const value = parsedFlags.value[key]
-      if (typeof value === 'boolean' || looksLikeTimeEntry(key, value)) {
+      if (typeof value === 'boolean' || looksLikeTimeEntry(key, value) || isRuleBookKey(key)) {
         return
       }
 
@@ -202,13 +271,17 @@ const otherEntries = computed(() => {
         key,
         label: humanizeOtherLabel(key),
         display: formatOtherValue(value),
-        multiline: typeof value === 'object',
+        multiline: typeof value === 'object' && value !== null,
         hint: '这是 repo_info.flags_json 中的扩展数据。'
       })
     })
 
   return entries
 })
+
+function isRuleBookKey(key) {
+  return String(key || '').toLowerCase().includes('rulebook')
+}
 
 function looksLikeTimeEntry(key, value) {
   if (typeof value !== 'string') return false
@@ -245,14 +318,20 @@ function humanizeTimeHint(key) {
   return mapping[key] || '这是系统记录的一次状态时间点。'
 }
 
+function humanizeRuleBookLabel(key) {
+  const mapping = {
+    rulebook_name: 'flags_json 中的 RuleBook 名称',
+    rulebook_version: 'flags_json 中的 RuleBook 版本'
+  }
+  return mapping[key] || `RuleBook 字段：${key}`
+}
+
 function humanizeOtherLabel(key) {
   const mapping = {
     legacy_base_iso_to_repoisos_migrated_count: '旧版迁移成功条数',
     legacy_base_iso_to_repoisos_skipped_count: '旧版迁移跳过条数',
     legacy_base_iso_to_repoisos_source: '迁移来源',
-    legacy_base_iso_repoisos_metadata_backfill_count: '元数据补齐条数',
-    rulebook_name: 'RuleBook 名称（flags）',
-    rulebook_version: 'RuleBook 版本（flags）'
+    legacy_base_iso_repoisos_metadata_backfill_count: '元数据补齐条数'
   }
   return mapping[key] || key
 }
@@ -439,6 +518,10 @@ watch(
   color: #64748b;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.detail-error {
+  color: #dc2626;
 }
 
 .other-code {

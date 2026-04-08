@@ -53,10 +53,10 @@ func RefreshRepoISORecord(c *gin.Context) {
 	var row models.RepoISO
 	if err := repoDB.First(&row, isoID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "repo iso record not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "repository entry not found"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repository entry failed: " + err.Error()})
 		return
 	}
 
@@ -87,6 +87,25 @@ func RefreshRepoISORecord(c *gin.Context) {
 		return
 	}
 	if info.IsDir() {
+		if row.IsDirectory {
+			pathMoved, sizeUpdated, err := refreshDirectoryRecordMetadata(repo.ID, repoDB, rootAbs, &row)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "refresh directory metadata failed: " + err.Error()})
+				return
+			}
+			populateRepoISOMetadata(&row)
+			c.JSON(http.StatusOK, gin.H{
+				"message":      "directory record refreshed",
+				"exists":       true,
+				"is_directory": true,
+				"can_delete":   false,
+				"path_moved":   pathMoved,
+				"md5_updated":  false,
+				"size_updated": sizeUpdated,
+				"record":       row,
+			})
+			return
+		}
 		if err := updateRepoISOMissingFlag(repoDB, &row, true); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "update missing flag failed: " + err.Error()})
 			return
@@ -164,8 +183,13 @@ func RefreshRepoISORecord(c *gin.Context) {
 		updates["is_missing"] = false
 	}
 
-	if row.SizeBytes <= 0 {
-		updates["size_bytes"] = info.Size()
+	size, err := normalization.CalculatePathSizeBytes(absPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "calculate size failed: " + err.Error()})
+		return
+	}
+	if row.SizeBytes != size {
+		updates["size_bytes"] = size
 		sizeUpdated = true
 	}
 
@@ -190,6 +214,7 @@ func RefreshRepoISORecord(c *gin.Context) {
 		}
 	}
 
+	populateRepoISOMetadata(&row)
 	c.JSON(http.StatusOK, gin.H{
 		"message":              "record metadata refreshed",
 		"auto_normalize":       repoInfo.AutoNormalize,
@@ -202,6 +227,57 @@ func RefreshRepoISORecord(c *gin.Context) {
 		"size_updated":         sizeUpdated,
 		"record":               row,
 	})
+}
+
+func refreshDirectoryRecordMetadata(repoID uint, repoDB *gorm.DB, rootAbs string, row *models.RepoISO) (bool, bool, error) {
+	if row == nil {
+		return false, false, fmt.Errorf("row is nil")
+	}
+
+	originalPath := row.Path
+	originalName := row.FileName
+	originalSize := row.SizeBytes
+	if row.IsDirectory {
+		step := normalization.NewDirectoryTransformStep()
+		if err := step.Process(repoID, repoDB, rootAbs, row); err != nil {
+			return false, false, err
+		}
+	}
+
+	absPath, err := resolveRepoISOAbsPath(rootAbs, row.Path)
+	if err != nil {
+		return false, false, err
+	}
+	size, err := normalization.CalculatePathSizeBytes(absPath)
+	if err != nil {
+		return false, false, err
+	}
+
+	pathMoved, sizeUpdated := detectDirectoryRefreshChanges(originalPath, originalName, originalSize, row, size)
+	updates := map[string]interface{}{}
+	if row.IsMissing {
+		updates["is_missing"] = false
+	}
+	if sizeUpdated {
+		updates["size_bytes"] = size
+	}
+	if len(updates) > 0 {
+		if err := repoDB.Model(&models.RepoISO{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+			return false, false, err
+		}
+	}
+	row.IsMissing = false
+	row.SizeBytes = size
+	return pathMoved, sizeUpdated, nil
+}
+
+func detectDirectoryRefreshChanges(originalPath string, originalName string, originalSize int64, row *models.RepoISO, refreshedSize int64) (bool, bool) {
+	if row == nil {
+		return false, originalSize != refreshedSize
+	}
+	pathMoved := row.Path != originalPath || row.FileName != originalName
+	sizeUpdated := originalSize != refreshedSize
+	return pathMoved, sizeUpdated
 }
 
 func maybeRelocateRepoISOPathByFlags(repoDB *gorm.DB, rootAbs string, row *models.RepoISO, sourceAbs string, autoNormalize bool) (bool, string, string, error) {

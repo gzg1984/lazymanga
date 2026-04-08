@@ -3,7 +3,6 @@ package handlers
 import (
 	"errors"
 	"lazymanga/models"
-	"lazymanga/normalization"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,7 +16,7 @@ type moveSingleRepoISORequest struct {
 	TargetRepoID uint `json:"target_repo_id"`
 }
 
-// MoveSingleRepoISO moves one repoiso record and its ISO file into another repository.
+// MoveSingleRepoISO moves one managed repository entry and its underlying file or directory into another repository.
 func MoveSingleRepoISO(c *gin.Context) {
 	repoID := strings.TrimSpace(c.Param("id"))
 	isoID := strings.TrimSpace(c.Param("isoId"))
@@ -69,10 +68,10 @@ func MoveSingleRepoISO(c *gin.Context) {
 	var sourceRow models.RepoISO
 	if err := sourceDB.First(&sourceRow, isoID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "source repo iso record not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "source repository entry not found"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query source repo iso failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query source repository entry failed: " + err.Error()})
 		return
 	}
 
@@ -100,7 +99,7 @@ func MoveSingleRepoISO(c *gin.Context) {
 
 	relPath := strings.TrimSpace(sourceRow.Path)
 	if relPath == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "source repo iso path is empty"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source repository path is empty"})
 		return
 	}
 
@@ -115,17 +114,12 @@ func MoveSingleRepoISO(c *gin.Context) {
 		return
 	}
 
-	info, err := os.Stat(sourceAbs)
-	if err != nil {
+	if _, err := os.Stat(sourceAbs); err != nil {
 		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "source iso file not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "source repo path not found"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "stat source iso file failed: " + err.Error()})
-		return
-	}
-	if info.IsDir() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "source path is a directory"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "stat source repo path failed: " + err.Error()})
 		return
 	}
 
@@ -169,40 +163,38 @@ func MoveSingleRepoISO(c *gin.Context) {
 		return
 	}
 
-	if err := moveRepoISOFileWithFallback(sourceAbs, targetAbs); err != nil {
+	if err := moveRepoISOPathWithFallback(sourceAbs, targetAbs); err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "move iso file failed: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "move repo path failed: " + err.Error()})
 		return
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		_ = moveRepoISOFileWithFallback(targetAbs, sourceAbs)
+		_ = moveRepoISOPathWithFallback(targetAbs, sourceAbs)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "commit target transaction failed: " + err.Error()})
 		return
 	}
 
 	if err := sourceDB.Delete(&models.RepoISO{}, sourceRow.ID).Error; err != nil {
 		_ = targetDB.Delete(&models.RepoISO{}, targetRow.ID).Error
-		_ = moveRepoISOFileWithFallback(targetAbs, sourceAbs)
+		_ = moveRepoISOPathWithFallback(targetAbs, sourceAbs)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete source record failed: " + err.Error()})
 		return
 	}
 
-	normalizeAsync := targetInfo.AutoNormalize
-	if normalizeAsync {
-		normalization.StartAsyncPostIndexNormalization(targetRepo.ID, targetDB, targetRootAbs, []models.RepoISO{targetRow})
-	}
+	normalizeAsync, normalizeRowCount := triggerTransferAutoNormalize(targetRepo, targetDB, targetRootAbs, targetInfo.AutoNormalize, []models.RepoISO{targetRow})
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":                   "single repo iso moved",
-		"source_repo_id":            sourceRepo.ID,
-		"target_repo_id":            targetRepo.ID,
-		"source_repo_iso_id":        sourceRow.ID,
-		"target_repo_iso_id":        targetRow.ID,
-		"path":                      relPath,
-		"target_auto_normalize":     targetInfo.AutoNormalize,
-		"target_normalize_async":    normalizeAsync,
-		"target_repo_iso":           targetRow,
-		"single_move_source_enable": sourceInfo.SingleMove,
+		"message":                    "single repository entry moved",
+		"source_repo_id":             sourceRepo.ID,
+		"target_repo_id":             targetRepo.ID,
+		"source_repo_iso_id":         sourceRow.ID,
+		"target_repo_iso_id":         targetRow.ID,
+		"path":                       relPath,
+		"target_auto_normalize":      targetInfo.AutoNormalize,
+		"target_normalize_async":     normalizeAsync,
+		"target_normalize_row_count": normalizeRowCount,
+		"target_repo_iso":            targetRow,
+		"single_move_source_enable":  sourceInfo.SingleMove,
 	})
 }

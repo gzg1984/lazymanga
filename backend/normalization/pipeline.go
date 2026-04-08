@@ -26,6 +26,7 @@ type Pipeline struct {
 func newDefaultPipeline() *Pipeline {
 	return &Pipeline{
 		steps: []RecordStep{
+			NewDirectoryTransformStep(),
 			NewOSRelocationStep(),
 			NewFileSizeBackfillStep(),
 			NewMD5BackfillStep(),
@@ -53,6 +54,7 @@ func StartAsyncPostIndexNormalization(repoID uint, repoDB *gorm.DB, rootAbs stri
 func StartAsyncMetadataBackfill(repoID uint, repoDB *gorm.DB, rootAbs string, records []models.RepoISO) {
 	p := &Pipeline{
 		steps: []RecordStep{
+			NewDirectoryTransformStep(),
 			NewFileSizeBackfillStep(),
 			NewMD5BackfillStep(),
 		},

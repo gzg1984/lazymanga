@@ -24,9 +24,9 @@
           <span class="form-label">仓库类型</span>
           <div class="form-main-col">
             <div v-if="loadingRepoTypes" class="muted">加载仓库类型中...</div>
-            <template v-else-if="repoTypeOptions.length">
+            <template v-else-if="visibleRepoTypeOptions.length">
               <el-radio-group v-model="createForm.repoType" :disabled="addRepoBusy">
-                <el-radio-button v-for="item in repoTypeOptions" :key="item.key" :label="item.key">{{ item.name }}</el-radio-button>
+                <el-radio-button v-for="item in visibleRepoTypeOptions" :key="item.key" :label="item.key">{{ item.name }}</el-radio-button>
               </el-radio-group>
               <div v-if="selectedRepoTypeDescription" class="type-help">{{ selectedRepoTypeDescription }}</div>
             </template>
@@ -156,6 +156,10 @@ const selectedRepoTypeOption = computed(() => {
   return repoTypeOptions.value.find((item) => item.key === createForm.value.repoType) || null
 })
 
+const visibleRepoTypeOptions = computed(() => {
+  return repoTypeOptions.value.filter((item) => item.enabled !== false)
+})
+
 const selectedRepoTypeDescription = computed(() => {
   return String(selectedRepoTypeOption.value?.description || '').trim()
 })
@@ -244,7 +248,7 @@ async function fetchRepos() {
   }
 }
 
-function getDefaultRepoTypeKey(items = repoTypeOptions.value) {
+function getDefaultRepoTypeKey(items = visibleRepoTypeOptions.value) {
   if (!Array.isArray(items) || items.length === 0) {
     return 'manga'
   }
@@ -266,9 +270,9 @@ async function fetchRepoTypes() {
 
     const data = await res.json()
     repoTypeOptions.value = Array.isArray(data?.items) ? data.items : []
-    const hasSelected = repoTypeOptions.value.some((item) => item.key === createForm.value.repoType)
+    const hasSelected = visibleRepoTypeOptions.value.some((item) => item.key === createForm.value.repoType)
     if (!hasSelected) {
-      createForm.value.repoType = getDefaultRepoTypeKey(repoTypeOptions.value)
+      createForm.value.repoType = getDefaultRepoTypeKey(visibleRepoTypeOptions.value)
     }
     syncNameIfAuto()
   } catch (e) {
@@ -283,14 +287,22 @@ function normalizePathInput(v) {
   return String(v || '').replace(/\\/g, '/').trim()
 }
 
+function getSuggestedPathLeaf(rawPath) {
+  if (!rawPath || rawPath === '/') return ''
+  const parts = rawPath.replace(/^\/+/, '').replace(/\/+$/, '').split('/').filter(Boolean)
+  return parts.length ? parts[parts.length - 1] : ''
+}
+
 function deriveSuggestedName() {
-  const scope = createForm.value.isInternal
-    ? '内部'
-    : `外部-${String(createForm.value.externalDeviceName || '').trim() || '未选设备'}`
   const rawPath = normalizePathInput(createForm.value.rootPath)
-  const pathLabel = !rawPath ? '未设置路径' : (rawPath === '/' ? 'root' : rawPath.replace(/^\/+/, '').replace(/\//g, '-'))
-  const typeLabel = selectedRepoTypeOption.value?.name || String(createForm.value.repoType || '仓库类型').trim() || '仓库类型'
-  return `${scope}-${pathLabel}-${typeLabel}`
+  const pathLeaf = getSuggestedPathLeaf(rawPath)
+  if (pathLeaf) {
+    return pathLeaf
+  }
+  if (rawPath === '/') {
+    return 'root'
+  }
+  return selectedRepoTypeOption.value?.name || String(createForm.value.repoType || '新仓库').trim() || '新仓库'
 }
 
 function syncNameIfAuto() {
@@ -422,11 +434,9 @@ async function onCreateTypeChanged() {
 }
 
 async function openAdd() {
-  await fetchRepos()
-  await fetchRepoTypes()
   addDialogVisible.value = true
   createForm.value = {
-    repoType: getDefaultRepoTypeKey(repoTypeOptions.value),
+    repoType: getDefaultRepoTypeKey(visibleRepoTypeOptions.value),
     isInternal: true,
     externalDeviceName: '',
     rootPath: '',
@@ -436,9 +446,31 @@ async function openAdd() {
   browseDir.value = ''
   externalDevices.value = []
   folderList.value = []
-
-  await fetchFoldersForCreate('')
   syncNameIfAuto()
+
+  const blockingTasks = []
+  if (repos.value.length === 0) {
+    blockingTasks.push(fetchRepos())
+  } else {
+    void fetchRepos()
+  }
+
+  if (repoTypeOptions.value.length === 0) {
+    blockingTasks.push(fetchRepoTypes())
+  } else {
+    void fetchRepoTypes()
+  }
+
+  if (blockingTasks.length > 0) {
+    await Promise.all(blockingTasks)
+    const hasSelected = visibleRepoTypeOptions.value.some((item) => item.key === createForm.value.repoType)
+    if (!hasSelected) {
+      createForm.value.repoType = getDefaultRepoTypeKey(visibleRepoTypeOptions.value)
+    }
+    syncNameIfAuto()
+  }
+
+  void fetchFoldersForCreate('')
 }
 
 function closeAddDialog() {
@@ -480,7 +512,7 @@ async function submitCreateRepo() {
     }
     addDialogVisible.value = false
     emitter.emit('refresh-all')
-    ElMessage.success('仓库已创建，正在自动扫描 ISO...')
+    ElMessage.success('仓库已创建，正在自动扫描仓库内容...')
   } catch (e) {
     ElMessage.error(e.message || '新增仓库失败')
   } finally {

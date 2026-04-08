@@ -8,16 +8,24 @@ import (
 	"lazymanga/models"
 	"log"
 	"strings"
+	"sync"
+	"time"
 
 	"gorm.io/gorm"
 )
 
 const (
-	repoInfoSingletonID      uint   = 1
-	repoInfoSchemaVersion    int    = 5
-	defaultRepoInfoFlagsJSON string = "{}"
-	repoTypeNone             string = "none"
-	repoTypeOS               string = "os"
+	repoInfoSingletonID         uint          = 1
+	repoInfoSchemaVersion       int           = 5
+	defaultRepoInfoFlagsJSON    string        = "{}"
+	repoTypeNone                string        = "none"
+	repoTypeOS                  string        = "os"
+	repoMetadataRefreshInterval time.Duration = 15 * time.Second
+)
+
+var (
+	repoMetadataRefreshMu     sync.Mutex
+	repoMetadataLastRefreshAt time.Time
 )
 
 func normalizeCreateRepoType(repoType string) (string, error) {
@@ -115,6 +123,31 @@ func BootstrapRepositories() error {
 
 	log.Printf("BootstrapRepositories: completed total=%d", len(repos))
 	return nil
+}
+
+func shouldRefreshRepositoryMetadataAt(lastRefresh time.Time, now time.Time, ttl time.Duration, force bool) bool {
+	if force || ttl <= 0 {
+		return true
+	}
+	if lastRefresh.IsZero() {
+		return true
+	}
+	return now.Sub(lastRefresh) >= ttl
+}
+
+// RefreshRepositoryMetadataCachesIfStale refreshes repo metadata caches only when the last refresh is older than the throttle interval.
+func RefreshRepositoryMetadataCachesIfStale(repos []models.Repository, force bool) (bool, int, []error) {
+	now := time.Now()
+	repoMetadataRefreshMu.Lock()
+	if !shouldRefreshRepositoryMetadataAt(repoMetadataLastRefreshAt, now, repoMetadataRefreshInterval, force) {
+		repoMetadataRefreshMu.Unlock()
+		return false, 0, nil
+	}
+	repoMetadataLastRefreshAt = now
+	repoMetadataRefreshMu.Unlock()
+
+	updated, errs := RefreshRepositoryMetadataCaches(repos)
+	return true, updated, errs
 }
 
 // RefreshRepositoryMetadataCaches refreshes global name/basic/repo_uuid caches
@@ -412,12 +445,8 @@ func buildRepoInfoFromRepository(repo models.Repository) (models.RepoInfo, error
 	}
 
 	initialRepoTypeKey := strings.TrimSpace(strings.ToLower(repo.RepoTypeKey))
-	if initialRepoTypeKey == "" {
-		if repo.Basic {
-			initialRepoTypeKey = repoTypeNone
-		} else {
-			initialRepoTypeKey = defaultRepoTypeKey
-		}
+	if initialRepoTypeKey == "" || (repo.Basic && initialRepoTypeKey == repoTypeNone) {
+		initialRepoTypeKey = defaultRepoTypeKey
 	}
 
 	return models.RepoInfo{
