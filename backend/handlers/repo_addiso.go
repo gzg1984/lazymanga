@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,12 +21,199 @@ type createRepoISORequest struct {
 	PathKind string `json:"path_kind"`
 }
 
+const (
+	repoManualAddedFilesSubdir = "manual_added"
+	repoManualAddedDirsSubdir  = "manual_added_dirs"
+	repoISOItemKindArchive     = "archive"
+)
+
+type repoImportPlan struct {
+	TargetAbs    string
+	Copied       bool
+	ItemKind     string
+	TargetSubdir string
+}
+
 func normalizeCreateRepoISOPathKind(v string) string {
 	kind := strings.TrimSpace(strings.ToLower(v))
 	if kind == "directory" || kind == "dir" || kind == "folder" {
 		return "directory"
 	}
 	return "file"
+}
+
+func parseRepoISOMetadataJSONMap(raw string) map[string]any {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "{}" {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return nil
+	}
+	if len(decoded) == 0 {
+		return nil
+	}
+	return decoded
+}
+
+func detectRepoISOItemKind(row models.RepoISO, settings repoTypeSettings) string {
+	if metadata := parseRepoISOMetadataJSONMap(row.MetadataJSON); metadata != nil {
+		if kind, ok := metadata["item_kind"].(string); ok && strings.TrimSpace(strings.ToLower(kind)) == repoISOItemKindArchive {
+			return repoISOItemKindArchive
+		}
+	}
+	if !row.IsDirectory && isArchiveFileForSettings(row.FileName, settings) {
+		return repoISOItemKindArchive
+	}
+	return ""
+}
+
+func isArchiveFileForSettings(fileName string, settings repoTypeSettings) bool {
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
+	if ext == "" {
+		return false
+	}
+	for _, part := range strings.Split(canonicalizeArchiveExtensionsCSV(settings.ArchiveExtensions), ",") {
+		if strings.TrimSpace(part) == ext {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveRepoManualImportSubdir(pathKind string, fileName string, settings repoTypeSettings) (string, string, error) {
+	if pathKind == "directory" {
+		if settings.MaterializedSubdir != defaultMaterializedSubdir {
+			return filepath.ToSlash(filepath.Join(settings.MaterializedSubdir, repoManualAddedDirsSubdir)), "", nil
+		}
+		return repoManualAddedDirsSubdir, "", nil
+	}
+	if isArchiveFileForSettings(fileName, settings) {
+		archiveSubdir, _, err := validateArchiveSettings(settings.ArchiveSubdir, settings.MaterializedSubdir)
+		if err != nil {
+			return "", "", err
+		}
+		return archiveSubdir, repoISOItemKindArchive, nil
+	}
+	if settings.MaterializedSubdir != defaultMaterializedSubdir {
+		return filepath.ToSlash(filepath.Join(settings.MaterializedSubdir, repoManualAddedFilesSubdir)), "", nil
+	}
+	return repoManualAddedFilesSubdir, "", nil
+}
+
+func planRepoImport(rootAbs string, sourceAbs string, pathKind string, settings repoTypeSettings) (repoImportPlan, error) {
+	plan := repoImportPlan{TargetAbs: sourceAbs}
+	if isPathWithinRoot(rootAbs, sourceAbs) {
+		if pathKind != "directory" && isArchiveFileForSettings(filepath.Base(sourceAbs), settings) {
+			plan.ItemKind = repoISOItemKindArchive
+		}
+		return plan, nil
+	}
+	subdir, itemKind, err := resolveRepoManualImportSubdir(pathKind, filepath.Base(sourceAbs), settings)
+	if err != nil {
+		return repoImportPlan{}, err
+	}
+	targetAbs := filepath.Join(rootAbs, filepath.FromSlash(subdir), filepath.Base(sourceAbs))
+	if !isPathWithinRoot(rootAbs, targetAbs) {
+		return repoImportPlan{}, fmt.Errorf("target path out of repo root")
+	}
+	plan.TargetAbs = targetAbs
+	plan.Copied = true
+	plan.ItemKind = itemKind
+	plan.TargetSubdir = subdir
+	return plan, nil
+}
+
+func planRepoTransfer(rootAbs string, sourceAbs string, row models.RepoISO, settings repoTypeSettings) (repoImportPlan, error) {
+	pathKind := "file"
+	if row.IsDirectory {
+		pathKind = "directory"
+	}
+	if isPathWithinRoot(rootAbs, sourceAbs) {
+		plan := repoImportPlan{TargetAbs: sourceAbs, ItemKind: detectRepoISOItemKind(row, settings)}
+		return plan, nil
+	}
+	subdir, itemKind, err := resolveRepoManualImportSubdir(pathKind, row.FileName, settings)
+	if err != nil {
+		return repoImportPlan{}, err
+	}
+	if itemKind == "" {
+		itemKind = detectRepoISOItemKind(row, settings)
+	}
+	targetAbs := filepath.Join(rootAbs, filepath.FromSlash(subdir), row.FileName)
+	if !isPathWithinRoot(rootAbs, targetAbs) {
+		return repoImportPlan{}, fmt.Errorf("target path out of repo root")
+	}
+	return repoImportPlan{
+		TargetAbs:    targetAbs,
+		Copied:       true,
+		ItemKind:     itemKind,
+		TargetSubdir: subdir,
+	}, nil
+}
+
+func importRepoFile(rootAbs string, sourceAbs string, mode os.FileMode, settings repoTypeSettings) (repoImportPlan, error) {
+	plan, err := planRepoImport(rootAbs, sourceAbs, "file", settings)
+	if err != nil {
+		return repoImportPlan{}, err
+	}
+	if !plan.Copied {
+		return plan, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(plan.TargetAbs), 0o755); err != nil {
+		return repoImportPlan{}, fmt.Errorf("prepare target folder failed: %w", err)
+	}
+	finalTargetAbs, err := findRepoISOAvailableTargetPath(plan.TargetAbs)
+	if err != nil {
+		return repoImportPlan{}, fmt.Errorf("allocate target path failed: %w", err)
+	}
+	if err := copyFile(sourceAbs, finalTargetAbs, mode); err != nil {
+		return repoImportPlan{}, fmt.Errorf("copy source file failed: %w", err)
+	}
+	plan.TargetAbs = finalTargetAbs
+	return plan, nil
+}
+
+func buildImportedFileMetadataJSON(itemKind string, relPath string, fileName string, sourcePath string) (string, error) {
+	return buildImportedFileMetadataJSONFromExisting("", itemKind, relPath, fileName, sourcePath)
+}
+
+func buildImportedFileMetadataJSONFromExisting(existingRaw string, itemKind string, relPath string, fileName string, sourcePath string) (string, error) {
+	if itemKind != repoISOItemKindArchive {
+		return strings.TrimSpace(existingRaw), nil
+	}
+	payload := parseRepoISOMetadataJSONMap(existingRaw)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["item_kind"] = repoISOItemKindArchive
+	payload["archive_format"] = strings.TrimPrefix(strings.ToLower(filepath.Ext(fileName)), ".")
+	if payload["lifecycle"] == nil || strings.TrimSpace(fmt.Sprint(payload["lifecycle"])) == "" {
+		payload["lifecycle"] = "ingested"
+	}
+	payload["archive_storage_path"] = relPath
+	if payload["source_path"] == nil || strings.TrimSpace(fmt.Sprint(payload["source_path"])) == "" {
+		if sanitizedSourcePath := sanitizeStoredSourceRelativePath(sourcePath); sanitizedSourcePath != "" {
+			payload["source_path"] = sanitizedSourcePath
+		}
+	}
+	if payload["original_name"] == nil || strings.TrimSpace(fmt.Sprint(payload["original_name"])) == "" {
+		originalName := sanitizeStoredSourcePathSegment(fileName)
+		if sanitizedSourcePath := sanitizeStoredSourceRelativePath(sourcePath); sanitizedSourcePath != "" {
+			if sourceBase := sanitizeStoredSourcePathSegment(filepath.Base(strings.TrimRight(sanitizedSourcePath, "/"))); sourceBase != "" {
+				originalName = sourceBase
+			}
+		}
+		if originalName != "" {
+			payload["original_name"] = originalName
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 // CreateRepoISO manually adds a single file or directory entry into the target repository index.
@@ -51,6 +239,16 @@ func CreateRepoISO(c *gin.Context) {
 	repoDB, rootAbs, _, err := openRepoScopedDB(repo)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "prepare repo db failed: " + err.Error()})
+		return
+	}
+	repoInfo, err := EnsureRepoInfoFromRepository(repoDB, repo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load repo info failed: " + err.Error()})
+		return
+	}
+	_, _, _, effectiveSettings, _, err := resolveEffectiveRepoTypeSettings(repoInfo, repo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "resolve repo type settings failed: " + err.Error()})
 		return
 	}
 
@@ -82,7 +280,7 @@ func CreateRepoISO(c *gin.Context) {
 			return
 		}
 
-		targetAbs, copied, err := importRepoDirectory(rootAbs, sourceAbs)
+		targetAbs, copied, err := importRepoDirectory(rootAbs, sourceAbs, effectiveSettings)
 		if err != nil {
 			msg := err.Error()
 			status := http.StatusInternalServerError
@@ -145,31 +343,17 @@ func CreateRepoISO(c *gin.Context) {
 		return
 	}
 
-	targetAbs := sourceAbs
-	if !isPathWithinRoot(rootAbs, sourceAbs) {
-		targetAbs = filepath.Join(rootAbs, "manual_added", filepath.Base(sourceAbs))
-		if !isPathWithinRoot(rootAbs, targetAbs) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "target path out of repo root"})
-			return
+	importPlan, err := importRepoFile(rootAbs, sourceAbs, srcInfo.Mode(), effectiveSettings)
+	if err != nil {
+		msg := err.Error()
+		status := http.StatusInternalServerError
+		if strings.Contains(msg, "target path out of repo root") {
+			status = http.StatusBadRequest
 		}
-
-		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "prepare target folder failed: " + err.Error()})
-			return
-		}
-
-		finalTargetAbs, err := findRepoISOAvailableTargetPath(targetAbs)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "allocate target path failed: " + err.Error()})
-			return
-		}
-
-		if err := copyFile(sourceAbs, finalTargetAbs, srcInfo.Mode()); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "copy source file failed: " + err.Error()})
-			return
-		}
-		targetAbs = finalTargetAbs
+		c.JSON(status, gin.H{"error": msg})
+		return
 	}
+	targetAbs := importPlan.TargetAbs
 
 	relPath, err := filepath.Rel(rootAbs, targetAbs)
 	if err != nil {
@@ -199,6 +383,12 @@ func CreateRepoISO(c *gin.Context) {
 		SizeBytes: targetInfo.Size(),
 		Tags:      models.ExtractTagsFromFileName(filepath.Base(targetAbs)),
 	}
+	metadataJSON, err := buildImportedFileMetadataJSON(importPlan.ItemKind, relPath, row.FileName, sourceRel)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "build metadata failed: " + err.Error()})
+		return
+	}
+	row.MetadataJSON = metadataJSON
 	if err := repoDB.Create(&row).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create repository entry failed: " + err.Error()})
 		return
@@ -206,37 +396,38 @@ func CreateRepoISO(c *gin.Context) {
 
 	normalization.StartAsyncPostIndexNormalization(repo.ID, repoDB, rootAbs, []models.RepoISO{row})
 	c.JSON(http.StatusCreated, gin.H{
-		"message":  "repository entry added",
-		"repo_id":  repo.ID,
-		"source":   sourceRel,
-		"copied":   !sameRepoISOPath(sourceAbs, targetAbs),
-		"repo_iso": row,
+		"message":      "repository entry added",
+		"repo_id":      repo.ID,
+		"source":       sourceRel,
+		"copied":       importPlan.Copied,
+		"import_kind":  importPlan.ItemKind,
+		"target_subdir": importPlan.TargetSubdir,
+		"repo_iso":     row,
 	})
 }
 
-func importRepoDirectory(rootAbs string, sourceAbs string) (string, bool, error) {
-	targetAbs := sourceAbs
-	if !isPathWithinRoot(rootAbs, sourceAbs) {
-		targetAbs = filepath.Join(rootAbs, "manual_added_dirs", filepath.Base(sourceAbs))
-		if !isPathWithinRoot(rootAbs, targetAbs) {
-			return "", false, fmt.Errorf("target path out of repo root")
-		}
-
-		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
-			return "", false, fmt.Errorf("prepare target folder failed: %w", err)
-		}
-
-		finalTargetAbs, err := findRepoISOAvailableTargetPath(targetAbs)
-		if err != nil {
-			return "", false, fmt.Errorf("allocate target path failed: %w", err)
-		}
-		if err := copyDirectoryRecursive(sourceAbs, finalTargetAbs); err != nil {
-			return "", false, fmt.Errorf("copy source directory failed: %w", err)
-		}
-		targetAbs = finalTargetAbs
+func importRepoDirectory(rootAbs string, sourceAbs string, settings repoTypeSettings) (string, bool, error) {
+	plan, err := planRepoImport(rootAbs, sourceAbs, "directory", settings)
+	if err != nil {
+		return "", false, err
+	}
+	if !plan.Copied {
+		return plan.TargetAbs, false, nil
 	}
 
-	return targetAbs, !sameRepoISOPath(sourceAbs, targetAbs), nil
+	if err := os.MkdirAll(filepath.Dir(plan.TargetAbs), 0o755); err != nil {
+		return "", false, fmt.Errorf("prepare target folder failed: %w", err)
+	}
+
+	finalTargetAbs, err := findRepoISOAvailableTargetPath(plan.TargetAbs)
+	if err != nil {
+		return "", false, fmt.Errorf("allocate target path failed: %w", err)
+	}
+	if err := copyDirectoryRecursive(sourceAbs, finalTargetAbs); err != nil {
+		return "", false, fmt.Errorf("copy source directory failed: %w", err)
+	}
+
+	return finalTargetAbs, true, nil
 }
 
 func copyDirectoryRecursive(source string, target string) error {

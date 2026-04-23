@@ -58,6 +58,7 @@ func populateRepoISOMetadata(row *models.RepoISO) {
 	if row == nil {
 		return
 	}
+	row.ItemKind = ""
 	row.Metadata = nil
 	trimmed := strings.TrimSpace(row.MetadataJSON)
 	if trimmed == "" || trimmed == "{}" {
@@ -70,6 +71,9 @@ func populateRepoISOMetadata(row *models.RepoISO) {
 	}
 	if len(decoded) == 0 {
 		return
+	}
+	if itemKind, ok := decoded["item_kind"].(string); ok {
+		row.ItemKind = strings.TrimSpace(itemKind)
 	}
 	row.Metadata = decoded
 }

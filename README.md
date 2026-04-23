@@ -75,4 +75,4 @@ lzc-cli project build
 ```
 lzc-cli app install cloud.lazybird.app.lazymanga-v0.1.0.lpk
 ```
-- 测试通过，则 lzc-cli appstore publish cloud.lazybird.app.lazymanga-v0.1.0.lpk             
+- 测试通过，则 lzc-cli appstore publish cloud.lazybird.app.lazymanga-v0.1.0.lpk

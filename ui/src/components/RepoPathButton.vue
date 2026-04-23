@@ -4,42 +4,57 @@
       {{ pathButtonText }}
     </el-button>
 
-    <el-dialog v-model="dialogVisible" title="仓库路径与扫描" width="760px">
-      <div class="flex flex-col gap-4">
-        <div v-if="isBasicRepo" class="basic-repo-tip">
-          <div class="basic-repo-tip-line">
-            <el-icon class="basic-repo-tip-icon"><WarningFilled /></el-icon>
-            <span>基础漫画仓库的仓库根路径为系统存储根目录，所以</span>
-            <span class="basic-repo-tip-danger">不会自动扫描</span>
-            <span>。</span>
+    <el-dialog v-model="dialogVisible" title="挂载路径" width="760px">
+      <div class="repo-path-layout">
+        <section class="repo-path-panel repo-path-info-panel">
+          <div class="repo-panel-header">
+            <div>
+              <div class="repo-panel-eyebrow">固定信息</div>
+              <h3 class="repo-panel-title">仓库配置</h3>
+            </div>
           </div>
-          <div class="basic-repo-tip-line">
-            <el-icon class="basic-repo-tip-icon"><WarningFilled /></el-icon>
-            <span>所有元素需要</span>
-            <span class="basic-repo-tip-success">手工添加</span>
-            <span>。</span>
+
+          <div v-if="isBasicRepo" class="basic-repo-tip">
+            <div class="basic-repo-tip-line">
+              <el-icon class="basic-repo-tip-icon"><WarningFilled /></el-icon>
+              <span>基础漫画仓库的仓库根路径为系统存储根目录，所以</span>
+              <span class="basic-repo-tip-danger">不会自动扫描</span>
+              <span>。</span>
+            </div>
+            <div class="basic-repo-tip-line">
+              <el-icon class="basic-repo-tip-icon"><WarningFilled /></el-icon>
+              <span>所有元素需要</span>
+              <span class="basic-repo-tip-success">手工添加</span>
+              <span>。</span>
+            </div>
           </div>
-        </div>
-        <div class="repo-info-grid">
-          <div class="repo-info-item">
-            <span class="repo-info-label">仓库位置类型</span>
-            <span class="repo-info-value">{{ repoTypeLabel }}</span>
+
+          <div class="repo-info-grid">
+            <div class="repo-info-item">
+              <span class="repo-info-label">仓库位置类型</span>
+              <span class="repo-info-value">{{ repoTypeLabel }}</span>
+            </div>
+            <div class="repo-info-item">
+              <span class="repo-info-label">外部存储</span>
+              <span class="repo-info-value">{{ isInternal ? '（内部仓库）' : (externalDeviceName || '（未绑定）') }}</span>
+            </div>
+            <div class="repo-info-item repo-info-item-wide">
+              <span class="repo-info-label">仓库路径</span>
+              <span class="repo-info-value">{{ displayRepoPath }}</span>
+            </div>
           </div>
-          <div class="repo-info-item">
-            <span class="repo-info-label">外部存储</span>
-            <span class="repo-info-value">{{ isInternal ? '（内部仓库）' : (externalDeviceName || '（未绑定）') }}</span>
-          </div>
-          <div class="repo-info-item repo-info-item-wide">
-            <span class="repo-info-label">仓库路径</span>
-            <span class="repo-info-value">{{ displayRepoPath }}</span>
-          </div>
-        </div>
+        </section>
       </div>
 
       <template #footer>
         <div class="dialog-footer">
-          <el-button v-if="!isBasicRepo" class="footer-refresh-btn" type="info" plain :loading="normalizingIncremental" :disabled="isBusy" @click="refreshRepo">
-            刷新
+          <el-button
+            type="danger"
+            :loading="deletingRepo"
+            :disabled="isBusy || isBasicRepo"
+            @click="deleteRepo"
+          >
+            卸载仓库（不会删除任何实际内容）
           </el-button>
           <el-button :disabled="isBusy" @click="closeDialog">不做任何事</el-button>
         </div>
@@ -50,7 +65,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { WarningFilled } from '@element-plus/icons-vue'
 import emitter from '../eventBus'
 
@@ -61,7 +76,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['normalized'])
+const emit = defineEmits(['deleted'])
 
 const dialogVisible = ref(false)
 const currentRepoPath = ref('加载中...')
@@ -69,9 +84,9 @@ const isInternal = ref(true)
 const externalDeviceName = ref('')
 const isBasicRepo = ref(false)
 const loadingRepoInfo = ref(false)
-const normalizingIncremental = ref(false)
+const deletingRepo = ref(false)
 
-const isBusy = computed(() => normalizingIncremental.value || loadingRepoInfo.value)
+const isBusy = computed(() => loadingRepoInfo.value || deletingRepo.value)
 const repoTypeLabel = computed(() => (isInternal.value ? '内部' : '外部'))
 const displayRepoPath = computed(() => {
   if (isBasicRepo.value) {
@@ -81,9 +96,9 @@ const displayRepoPath = computed(() => {
 })
 const pathButtonText = computed(() => {
   if (isBasicRepo.value) {
-    return '仓库路径：基础漫画仓库'
+    return '挂载：基础漫画仓库'
   }
-  return `仓库路径：${currentRepoPath.value || '（未设置）'} （${repoTypeLabel.value}）`
+  return `挂载：${currentRepoPath.value || '（未设置）'} （${repoTypeLabel.value}）`
 })
 
 async function parseErrorMessage(res, fallback) {
@@ -154,29 +169,42 @@ function closeDialog() {
   dialogVisible.value = false
 }
 
-async function refreshRepo() {
+async function deleteRepo() {
   if (isBasicRepo.value) {
-    ElMessage.info('基础漫画仓库没有仓库根路径，所有内容需要手工添加')
+    ElMessage.warning('基础漫画仓库不允许卸载')
     return
   }
 
-  normalizingIncremental.value = true
   try {
-    const res = await fetch(`/api/repos/${props.repoId}/normalize/incremental`, { method: 'POST' })
+    await ElMessageBox.confirm(
+      '确认卸载这个仓库记录吗？不会删除任何实际内容。',
+      '确认卸载仓库',
+      {
+        type: 'warning',
+        confirmButtonText: '卸载仓库',
+        cancelButtonText: '取消'
+      }
+    )
+  } catch (_) {
+    return
+  }
+
+  deletingRepo.value = true
+  try {
+    const res = await fetch(`/api/repos/${props.repoId}`, { method: 'DELETE' })
     if (!res.ok) {
-      throw new Error(await parseErrorMessage(res, '触发刷新失败'))
+      throw new Error(await parseErrorMessage(res, '卸载仓库失败'))
     }
 
-    await res.json()
-    emitter.emit('refresh-all')
-    emit('normalized')
-    ElMessage.success('已触发刷新')
     dialogVisible.value = false
+    emitter.emit('refresh-all')
+    emit('deleted')
+    ElMessage.success('仓库已卸载')
   } catch (e) {
-    console.error('[RepoPathButton] refreshRepo failed', e)
-    ElMessage.error(e.message || '触发刷新失败')
+    console.error('[RepoPathButton] deleteRepo failed', e)
+    ElMessage.error(e.message || '卸载仓库失败')
   } finally {
-    normalizingIncremental.value = false
+    deletingRepo.value = false
   }
 }
 
@@ -199,6 +227,47 @@ watch(
 </script>
 
 <style scoped>
+.repo-path-layout {
+  display: flex;
+}
+
+.repo-path-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #dbe4ee;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.repo-path-info-panel {
+  flex: 1 1 auto;
+}
+
+.repo-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.repo-panel-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.repo-panel-title {
+  margin: 4px 0 0;
+  font-size: 20px;
+  line-height: 1.2;
+  color: #0f172a;
+}
+
 .repo-info-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -233,13 +302,10 @@ watch(
 
 .dialog-footer {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   width: 100%;
-}
-
-.footer-refresh-btn {
-  margin-right: auto;
 }
 
 .basic-repo-tip {
@@ -275,5 +341,11 @@ watch(
 .basic-repo-tip-success {
   color: #16a34a;
   font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .repo-info-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

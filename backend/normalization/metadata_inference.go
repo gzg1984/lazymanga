@@ -144,8 +144,6 @@ func indexRepoPathAnalysisRow(model *RepoPathAnalysisModel, row models.RepoISO, 
 		}
 	}
 
-	title := cleanInferenceSegmentText(metadata["title"])
-	seriesName := cleanInferenceSegmentText(metadata["series_name"])
 	for field, value := range metadata {
 		field = strings.TrimSpace(field)
 		cleanValue := cleanInferenceSegmentText(value)
@@ -156,11 +154,13 @@ func indexRepoPathAnalysisRow(model *RepoPathAnalysisModel, row models.RepoISO, 
 		if normalizedValue == "" {
 			continue
 		}
-		if title != "" {
-			addContextValueVote(model, "title:"+normalizeInferenceKey(title), field, normalizedValue)
-		}
-		if seriesName != "" {
-			addContextValueVote(model, "series_name:"+normalizeInferenceKey(seriesName), field, normalizedValue)
+		for _, anchorField := range ContextAnchorFields() {
+			anchorValue := cleanInferenceSegmentText(metadata[anchorField])
+			anchorKey := normalizeInferenceKey(anchorValue)
+			if anchorKey == "" {
+				continue
+			}
+			addContextValueVote(model, anchorField+":"+anchorKey, field, normalizedValue)
 		}
 	}
 
@@ -196,11 +196,7 @@ func shouldUseMetadataFieldForAnalysis(field string, value string) bool {
 	if field == "" || value == "" {
 		return false
 	}
-	switch field {
-	case "source_path", "original_name", "normalized_name", "path", "target_path", "relative_path":
-		return false
-	}
-	return true
+	return ShouldIncludeFieldInAnalysisModel(field)
 }
 
 func recordIgnoredPrefixesFromExample(model *RepoPathAnalysisModel, originalName string, metadata map[string]string) {
@@ -352,7 +348,39 @@ func inferTitleFromLeaf(model *RepoPathAnalysisModel, leaf string, metadata map[
 	if residual != "" && !isLikelyNoiseTitle(residual) {
 		return residual
 	}
+
+	bracketedFallback := inferTitleFromBracketedSegments(model, segments, metadata)
+	if bracketedFallback != "" {
+		return bracketedFallback
+	}
 	return ""
+}
+
+func inferTitleFromBracketedSegments(model *RepoPathAnalysisModel, segments []pathInferenceSegment, metadata map[string]string) string {
+	if len(segments) == 0 {
+		return ""
+	}
+	candidates := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if !segment.Bracketed {
+			continue
+		}
+		candidate := trimIgnoredPrefixCandidate(model, cleanInferenceSegmentText(segment.Text))
+		if candidate == "" || isLikelyNoiseTitle(candidate) || looksLikeContributorTag(candidate) {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return scoreTitleCandidate(model, candidates[i], metadata) > scoreTitleCandidate(model, candidates[j], metadata)
+	})
+	return candidates[0]
 }
 
 func scoreTitleCandidate(model *RepoPathAnalysisModel, candidate string, metadata map[string]string) int {
@@ -368,6 +396,12 @@ func scoreTitleCandidate(model *RepoPathAnalysisModel, candidate string, metadat
 	if hasMeaningfulRunes(cleaned) {
 		score += 15
 	}
+	if seriesName := cleanInferenceSegmentText(metadata["series_name"]); seriesName != "" && isSeriesNameRelevantToTitle(seriesName, cleaned) {
+		score += 35
+		if normalized != normalizeInferenceKey(seriesName) {
+			score += 15
+		}
+	}
 	if model != nil {
 		if _, ok := model.ContextValueCounts["title:"+normalized]; ok {
 			score += 25
@@ -377,7 +411,7 @@ func scoreTitleCandidate(model *RepoPathAnalysisModel, candidate string, metadat
 		}
 	}
 	for field, value := range metadata {
-		if field == "title" || field == "series_name" {
+		if IsTitleRelatedField(field) {
 			continue
 		}
 		valueKey := normalizeInferenceKey(value)
@@ -392,7 +426,7 @@ func applyContextMetadataHints(model *RepoPathAnalysisModel, metadata map[string
 	if model == nil || len(model.ContextValueCounts) == 0 || len(metadata) == 0 {
 		return
 	}
-	for _, field := range []string{"title", "series_name"} {
+	for _, field := range ContextAnchorFields() {
 		valueKey := normalizeInferenceKey(metadata[field])
 		if valueKey == "" {
 			continue
@@ -417,6 +451,7 @@ func applyMetadataQualityGuards(metadata map[string]string) {
 	}
 
 	title := stripFixedTitleNoiseTags(strings.TrimSpace(metadata["title"]))
+	title = stripRecognizedMetadataTitleSuffix(title, metadata)
 	if title == "" {
 		delete(metadata, "title")
 	} else {
@@ -443,16 +478,127 @@ func stripFixedTitleNoiseTags(raw string) string {
 		return ""
 	}
 
-	noiseTags := []string{
-		"[中国翻訳]", "【中国翻訳】", "(中国翻訳)", "（中国翻訳）",
-		"[DL版]", "【DL版】", "(DL版)", "（DL版）",
-		"[無修正]", "【無修正】", "(無修正)", "（無修正）",
+	noiseKeywords := []string{
+		"中国翻訳",
+		"DL版",
+		"無修正",
+		"重新排列",
+		"白碼",
+		"薄碼",
+		"白碼、薄碼",
+		"疏碼",
 	}
-	for _, tag := range noiseTags {
-		cleaned = strings.ReplaceAll(cleaned, tag, " ")
+	noiseWrappers := [][2]string{
+		{"[", "]"},
+		{"【", "】"},
+		{"(", ")"},
+		{"（", "）"},
+	}
+	for _, keyword := range noiseKeywords {
+		for _, wrapper := range noiseWrappers {
+			cleaned = strings.ReplaceAll(cleaned, wrapper[0]+keyword+wrapper[1], " ")
+		}
 	}
 	cleaned = strings.Join(strings.Fields(cleaned), " ")
 	return strings.TrimSpace(cleaned)
+}
+
+func stripRecognizedMetadataTitleSuffix(title string, metadata map[string]string) string {
+	cleaned := strings.TrimSpace(title)
+	if cleaned == "" || len(metadata) == 0 {
+		return cleaned
+	}
+	for {
+		next, changed := stripOneRecognizedMetadataTitleSuffix(cleaned, metadata)
+		if !changed {
+			return cleaned
+		}
+		cleaned = next
+	}
+}
+
+func stripOneRecognizedMetadataTitleSuffix(title string, metadata map[string]string) (string, bool) {
+	wrappers := [][2]string{{"(", ")"}, {"（", "）"}, {"[", "]"}, {"【", "】"}}
+	for _, wrapper := range wrappers {
+		prefix, inner, ok := splitTrailingWrappedText(title, wrapper[0], wrapper[1])
+		if !ok {
+			continue
+		}
+		if isRecognizedMetadataSuffix(inner, metadata) {
+			return prefix, true
+		}
+	}
+	return title, false
+}
+
+func splitTrailingWrappedText(raw string, open string, close string) (string, string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || !strings.HasSuffix(trimmed, close) {
+		return "", "", false
+	}
+	end := len(trimmed) - len(close)
+	start := strings.LastIndex(trimmed[:end], open)
+	if start < 0 {
+		return "", "", false
+	}
+	prefix := strings.TrimSpace(trimmed[:start])
+	inner := strings.TrimSpace(trimmed[start+len(open) : end])
+	if prefix == "" || inner == "" {
+		return "", "", false
+	}
+	return prefix, inner, true
+}
+
+func isRecognizedMetadataSuffix(raw string, metadata map[string]string) bool {
+	normalizedRaw := normalizeSeriesSimilarityKey(raw)
+	if normalizedRaw == "" {
+		return false
+	}
+	for _, candidate := range recognizedMetadataSuffixCandidates(metadata) {
+		if normalizeSeriesSimilarityKey(candidate) == normalizedRaw {
+			return true
+		}
+	}
+	return false
+}
+
+func recognizedMetadataSuffixCandidates(metadata map[string]string) []string {
+	values := uniqueRecognizedMetadataSuffixValues(metadata)
+	if len(values) == 0 {
+		return nil
+	}
+	candidates := make([]string, 0, len(values)+4)
+	candidates = append(candidates, values...)
+	if len(values) >= 2 {
+		for i := 0; i < len(values); i++ {
+			for j := i + 1; j < len(values); j++ {
+				candidates = append(candidates, strings.TrimSpace(values[i]+" "+values[j]))
+			}
+		}
+	}
+	if len(values) >= 3 {
+		candidates = append(candidates, strings.TrimSpace(values[0]+" "+values[1]+" "+values[2]))
+	}
+	return candidates
+}
+
+func uniqueRecognizedMetadataSuffixValues(metadata map[string]string) []string {
+	fields := []string{"comic_market", "event_code", "original_work"}
+	values := make([]string, 0, len(fields))
+	seen := map[string]struct{}{}
+	for _, field := range fields {
+		value := cleanInferenceSegmentText(metadata[field])
+		normalized := normalizeSeriesSimilarityKey(value)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 func isSeriesNameRelevantToTitle(seriesName string, title string) bool {
@@ -751,7 +897,7 @@ func trimIgnoredPrefixCandidate(model *RepoPathAnalysisModel, text string) strin
 		}
 		if strings.HasPrefix(trimmed, prefix) {
 			next := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
-			if next != "" {
+			if cleanInferenceSegmentText(next) != "" {
 				trimmed = next
 			}
 		}
@@ -810,6 +956,20 @@ func isLikelyNoiseTitle(text string) bool {
 		return true
 	}
 	if len([]rune(cleaned)) == 1 && !hasMeaningfulRunes(cleaned) {
+		return true
+	}
+	return false
+}
+
+func looksLikeContributorTag(text string) bool {
+	cleaned := cleanInferenceSegmentText(text)
+	if cleaned == "" {
+		return false
+	}
+	if strings.ContainsAny(cleaned, ",，") {
+		return true
+	}
+	if strings.Contains(cleaned, "(") || strings.Contains(cleaned, "（") || strings.Contains(cleaned, ")") || strings.Contains(cleaned, "）") {
 		return true
 	}
 	return false

@@ -16,6 +16,43 @@ type deleteRepoISORequest struct {
 	DeleteFile bool `json:"delete_file"`
 }
 
+// DeleteMissingRepoISOs deletes all repoiso rows already marked as missing.
+func DeleteMissingRepoISOs(c *gin.Context) {
+	repoID := strings.TrimSpace(c.Param("id"))
+	if repoID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing id"})
+		return
+	}
+
+	var repo models.Repository
+	if err := db.First(&repo, repoID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "repo not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repo failed: " + err.Error()})
+		return
+	}
+
+	repoDB, _, _, err := openRepoScopedDB(repo)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "prepare repo db failed: " + err.Error()})
+		return
+	}
+
+	result := repoDB.Where("is_missing = ?", true).Delete(&models.RepoISO{})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete missing repository entries failed: " + result.Error.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "missing repository entries deleted",
+		"repo_id":       repo.ID,
+		"deleted_count": result.RowsAffected,
+	})
+}
+
 // DeleteRepoISO deletes a repoiso row, optionally deleting the ISO file itself.
 func DeleteRepoISO(c *gin.Context) {
 	repoID := strings.TrimSpace(c.Param("id"))

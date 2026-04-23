@@ -18,6 +18,7 @@ type RepoISO struct {
 	MD5           string         `json:"md5"`
 	SizeBytes     int64          `gorm:"column:size_bytes;default:-1" json:"size_bytes"`
 	MetadataJSON  string         `gorm:"column:metadata_json;type:text;default:''" json:"metadata_json,omitempty"`
+	ItemKind      string         `gorm:"-" json:"item_kind,omitempty"`
 	Metadata      map[string]any `gorm:"-" json:"metadata,omitempty"`
 	Tags          string         `json:"tags"`
 	IsMounted     bool           `json:"ismounted"`

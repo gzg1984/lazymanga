@@ -61,6 +61,23 @@ func DefaultMangaFilesRuleBook() RuleBook {
 	}
 }
 
+// DefaultManualMangaRuleBook scans common manga/archive document formats and image folders without relocation actions.
+func DefaultManualMangaRuleBook() RuleBook {
+	return RuleBook{
+		Name:    "manga-manual",
+		Version: "v1",
+		Scan: ScanSpec{
+			Extensions: []string{".cbz", ".cbr", ".zip", ".rar", ".7z", ".pdf"},
+			DirectoryRules: []DirectoryScanRule{{
+				Name:         "manual-manga-folder",
+				Extensions:   []string{".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"},
+				MinFileCount: 10,
+			}},
+		},
+		Rules: []Rule{},
+	}
+}
+
 // DefaultKaritaMangaRuleBook keeps a clean directory title and writes captured metadata into a sidecar JSON file.
 func DefaultKaritaMangaRuleBook() RuleBook {
 	return RuleBook{

@@ -37,8 +37,8 @@
     <div class="repo-actions-wrap mb-4 p-3 rounded bg-blue-100 border border-blue-400 text-blue-800 flex flex-wrap gap-2">
       <RepoIsoAddButton :repo-id="activeRepoId" />
       <RepoMergeButton :repo-id="activeRepoId" />
-      <RepoPathButton :repo-id="activeRepoId" />
-      <RepoSettingsButton :repo-id="activeRepoId" @deleted="onActiveRepoDeleted" />
+      <RepoPathButton :repo-id="activeRepoId" @deleted="onActiveRepoDeleted" />
+      <RepoSettingsButton :repo-id="activeRepoId" />
       <div class="flex-1"></div>
       <RepoInfoButton :repo-id="activeRepoId" />
     </div>

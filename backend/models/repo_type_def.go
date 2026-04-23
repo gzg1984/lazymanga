@@ -18,6 +18,12 @@ type RepoTypeDef struct {
 	ShowSize           bool      `gorm:"not null;default:false" json:"show_size"`
 	SingleMove         bool      `gorm:"not null;default:false" json:"single_move"`
 	ManualEditorMode   string    `gorm:"column:manual_editor_mode;not null;default:legacy-type-editor;size:32" json:"manual_editor_mode"`
+	MetadataDisplayMode   string    `gorm:"column:metadata_display_mode;not null;default:hidden;size:32" json:"metadata_display_mode"`
+	MetadataDisplayFields string    `gorm:"column:metadata_display_fields;type:text;not null;default:''" json:"metadata_display_fields"`
+	ArchiveSubdir      string    `gorm:"column:archive_subdir;not null;default:archives;size:255" json:"archive_subdir"`
+	MaterializedSubdir string    `gorm:"column:materialized_subdir;not null;default:/;size:255" json:"materialized_subdir"`
+	ArchiveExtensions  string    `gorm:"column:archive_extensions;type:text;not null;default:'.zip,.rar,.7z,.cbz,.cbr'" json:"archive_extensions"`
+	ArchiveReadInnerLayout bool   `gorm:"column:archive_read_inner_layout;not null;default:true" json:"archive_read_inner_layout"`
 	RuleBookName       string    `gorm:"not null;default:noop;size:64" json:"rulebook_name"`
 	RuleBookVersion    string    `gorm:"not null;default:v1;size:32" json:"rulebook_version"`
 	CreatedAt          time.Time `json:"created_at"`

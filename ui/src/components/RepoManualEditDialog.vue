@@ -37,6 +37,14 @@
         <div class="panel-header">
           <div class="panel-title-row">
             <div class="form-label">{{ editMode ? editActionLabel : '当前信息' }}</div>
+            <el-tooltip v-if="panelInfoTooltipLines.length" placement="top-start" effect="dark">
+              <template #content>
+                <div class="panel-tooltip-content">
+                  <div v-for="(line, index) in panelInfoTooltipLines" :key="`panel-tip-${index}`">{{ line }}</div>
+                </div>
+              </template>
+              <el-icon class="panel-title-tip-icon"><WarningFilled /></el-icon>
+            </el-tooltip>
             <span
               v-if="editMode"
               class="panel-title-hint"
@@ -56,6 +64,31 @@
             {{ editActionLabel }}
           </el-button>
         </div>
+
+        <el-alert
+          v-if="refreshProposalSummary"
+          class="refresh-proposal-alert"
+          type="warning"
+          :closable="false"
+          show-icon
+        >
+          <template #title>
+            {{ refreshProposalSummary }}
+          </template>
+          <div v-if="refreshProposalPathHint" class="refresh-proposal-path">识别来源：{{ refreshProposalPathHint }}</div>
+          <div class="refresh-proposal-actions">
+            <el-button
+              size="small"
+              type="warning"
+              plain
+              :disabled="submitting || !displayRecord?.id"
+              @click="openRefreshProposalEditor"
+            >
+              查看并确认提案
+            </el-button>
+            <span class="refresh-proposal-hint">当前只生成候选变更，关闭或取消不会自动落库。</span>
+          </div>
+        </el-alert>
 
         <template v-if="editMode">
           <div class="manual-edit-form inline-edit-form">
@@ -83,7 +116,7 @@
               <div v-else class="metadata-empty-hint">当前原始路径里还没有可提取的关键词。</div>
             </div>
 
-            <div v-if="!isMetadataEditor" class="form-row">
+            <div v-if="!usesMetadataEditor" class="form-row">
               <div class="form-label">类型</div>
               <el-radio-group v-model="form.targetType" :disabled="submitting || !isoRecord">
                 <el-radio-button label="os">OS</el-radio-button>
@@ -92,7 +125,7 @@
               </el-radio-group>
             </div>
 
-            <div v-if="!isMetadataEditor" class="form-row">
+            <div v-if="!usesMetadataEditor" class="form-row">
               <div class="form-label">修改名字</div>
               <el-radio-group v-model="form.nameMode" :disabled="submitting || !isoRecord">
                 <el-radio label="auto">自动</el-radio>
@@ -100,7 +133,7 @@
               </el-radio-group>
             </div>
 
-            <div v-if="!isMetadataEditor && form.nameMode === 'manual'" class="form-row">
+            <div v-if="!usesMetadataEditor && form.nameMode === 'manual'" class="form-row">
               <div class="form-label">新名字</div>
               <el-input
                 v-model="form.manualName"
@@ -110,7 +143,7 @@
               />
             </div>
 
-            <div v-if="isMetadataEditor" class="form-row">
+            <div v-if="usesMetadataEditor" class="form-row">
               <div class="form-label">元数据字段</div>
 
               <div v-if="metadataEditorEntries.length" class="metadata-editor-grid">
@@ -132,7 +165,8 @@
         </template>
 
         <template v-else>
-          <div v-if="displayMetadataEntries.length" class="metadata-display-grid">
+          <div v-if="!metadataDisplayEnabled" class="metadata-empty-hint">当前仓库配置未启用 metadata 展示；如需显示，请在仓库设置或仓库类型模板里开启。</div>
+          <div v-else-if="displayMetadataEntries.length" class="metadata-display-grid">
             <div
               v-for="entry in displayMetadataEntries"
               :key="`view-${entry.key}`"
@@ -197,6 +231,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import emitter from '../eventBus'
+import { metadataDisplayModeLabel, resolveMetadataDisplayConfig, shouldExposeMetadataFieldByConfig } from '../utils/repoMetadataDisplay'
 
 const props = defineProps({
   modelValue: {
@@ -210,10 +245,14 @@ const props = defineProps({
   isoRecord: {
     type: Object,
     default: null
+  },
+  refreshProposal: {
+    type: Object,
+    default: null
   }
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'update:refreshProposal'])
 
 const submitting = ref(false)
 const refreshing = ref(false)
@@ -223,6 +262,7 @@ const autoNormalizeEnabled = ref(false)
 const repoInfo = ref(null)
 const editMode = ref(false)
 const metadataDraft = ref({})
+const refreshMetadataProposal = ref(null)
 const activeInputTarget = ref(null)
 const activeInputElement = ref(null)
 const preferredMetadataKeys = [
@@ -304,14 +344,7 @@ function metadataFieldLabel(key) {
 }
 
 function shouldExposeMetadataField(key, normalizedValue) {
-  const normalizedKey = String(key || '').trim()
-  if (!normalizedKey || normalizedKey.startsWith('_')) {
-    return false
-  }
-  if (normalizedKey === 'path_parts' || normalizedKey === 'source_path' || normalizedKey === 'original_name') {
-    return false
-  }
-  return normalizedValue !== ''
+  return shouldExposeMetadataFieldByConfig(key, normalizedValue, metadataDisplayConfig.value)
 }
 
 function extractRowMetadata(item) {
@@ -361,6 +394,11 @@ function resetMetadataDraft() {
   metadataDraft.value = {}
 }
 
+function resetRefreshMetadataProposal() {
+  refreshMetadataProposal.value = null
+  emit('update:refreshProposal', null)
+}
+
 function resolveMetadataSourceRecord() {
   if (displayRecord.value) {
     return displayRecord.value
@@ -368,14 +406,63 @@ function resolveMetadataSourceRecord() {
   return props.isoRecord || null
 }
 
+function extractRefreshProposalMetadata() {
+  const metadata = refreshMetadataProposal.value?.metadata
+  if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+    return metadata
+  }
+  return {}
+}
+
+function resolveMetadataDraftSource() {
+  const proposalMetadata = extractRefreshProposalMetadata()
+  if (Object.keys(proposalMetadata).length > 0) {
+    return proposalMetadata
+  }
+  return extractRowMetadata(resolveMetadataSourceRecord())
+}
+
+function resolveMetadataProposalBase() {
+  return {
+    ...extractRowMetadata(resolveMetadataSourceRecord()),
+    ...extractRefreshProposalMetadata()
+  }
+}
+
+function normalizeArchiveSubdirForDialog(raw) {
+  const normalized = String(raw || '').replace(/\\/g, '/').trim().replace(/^\/+|\/+$/g, '')
+  return normalized || 'archives'
+}
+
+function stripArchivePrefixForDialogPath(raw) {
+  const normalizedPath = String(raw || '').replace(/\\/g, '/').trim().replace(/^\/+|\/+$/g, '')
+  if (!normalizedPath) {
+    return ''
+  }
+  if (!isArchiveRecord.value) {
+    return normalizedPath
+  }
+  const prefix = normalizeArchiveSubdirForDialog(repoInfo.value?.archive_subdir)
+  if (!prefix) {
+    return normalizedPath
+  }
+  if (normalizedPath === prefix) {
+    return ''
+  }
+  if (normalizedPath.startsWith(prefix + '/')) {
+    return normalizedPath.slice(prefix.length + 1)
+  }
+  return normalizedPath
+}
+
 function syncMetadataDraft() {
   const nextDraft = {}
-  if (!isMetadataEditor.value) {
+  if (!usesMetadataEditor.value) {
     metadataDraft.value = nextDraft
     return
   }
 
-  const metadata = extractRowMetadata(resolveMetadataSourceRecord())
+  const metadata = resolveMetadataDraftSource()
   for (const entry of metadataEditorEntries.value) {
     nextDraft[entry.key] = normalizeMetadataValue(metadata[entry.key] ?? entry.currentValue)
   }
@@ -383,7 +470,7 @@ function syncMetadataDraft() {
 }
 
 function buildMetadataPayload() {
-  const base = { ...extractRowMetadata(resolveMetadataSourceRecord()) }
+  const base = resolveMetadataProposalBase()
   const draft = metadataDraft.value || {}
   for (const entry of metadataEditorEntries.value) {
     const value = String(draft[entry.key] || '').trim()
@@ -486,6 +573,52 @@ function formatTargetTypeLabel(value) {
   return mapping[value] || String(value || '（未设置）')
 }
 
+function formatRefreshDiagnosisFlag(value) {
+  return value ? '是' : '否'
+}
+
+function formatRefreshDiagnosisKind() {
+  if (isDirectoryRecord.value) {
+    return '目录'
+  }
+  if (isArchiveRecord.value) {
+    return 'Archive 文件'
+  }
+  return '普通文件'
+}
+
+function formatRefreshDiagnosisFieldList(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return '（空）'
+  }
+  return value.map((item) => String(item || '').trim()).filter(Boolean).join('、') || '（空）'
+}
+
+function buildRefreshFallbackMessage(data) {
+  const analysis = data?.metadata_analysis
+  const proposal = data?.metadata_proposal
+  const hasProposalObject = !!(proposal && typeof proposal === 'object')
+  const proposalAvailable = !!proposal?.available
+  const proposalMode = String(proposal?.editor_mode || '').trim() || '（空）'
+  const analysisAttempted = !!analysis?.attempted
+  const analysisStatus = String(analysis?.status || '').trim() || '（空）'
+  const analysisReason = String(analysis?.reason || '').trim() || '（空）'
+  const analyzedAt = String(analysis?.analyzed_at || '').trim() || '（空）'
+  const detectedFields = formatRefreshDiagnosisFieldList(analysis?.detected_fields)
+  const blockedFields = formatRefreshDiagnosisFieldList(analysis?.blocked_fields)
+  const localMode = usesMetadataEditor.value ? 'metadata-editor' : editorMode.value
+
+  if (isArchiveRecord.value || usesMetadataEditor.value || isMetadataEditor.value) {
+    return [
+      '刷新已触发，但这次没有补充 md5/大小，也没有进入 metadata 提案确认流。',
+      `诊断：要素类型=${formatRefreshDiagnosisKind()}，exists=${formatRefreshDiagnosisFlag(data?.exists !== false)}，metadata_analysis.attempted=${formatRefreshDiagnosisFlag(analysisAttempted)}，analysis.status=${analysisStatus}，analysis.reason=${analysisReason}，analysis.at=${analyzedAt}，analysis.detected_fields=${detectedFields}，analysis.blocked_fields=${blockedFields}，metadata_proposal对象=${formatRefreshDiagnosisFlag(hasProposalObject)}，proposal.available=${formatRefreshDiagnosisFlag(proposalAvailable)}，proposal.editor_mode=${proposalMode}，前端当前编辑模式=${localMode}。`,
+      '这通常说明前端触发已到达 /refresh，但后端这次没有返回可用的 metadata 提案。'
+    ].join(' ')
+  }
+
+  return isDirectoryRecord.value ? '目录存在，已完成路径识别检查与大小刷新' : '文件存在，md5和文件大小均已存在'
+}
+
 function formatChangeValue(value) {
   const normalized = normalizeMetadataValue(value)
   return normalized || '（空）'
@@ -507,7 +640,7 @@ function collectPendingChanges() {
     return changes
   }
 
-  if (!isMetadataEditor.value) {
+  if (!usesMetadataEditor.value) {
     const currentType = inferTargetTypeFromRecord(record)
     if (form.targetType !== currentType) {
       changes.push({
@@ -535,16 +668,23 @@ function collectPendingChanges() {
     }
   }
 
-  if (isMetadataEditor.value) {
-    const metadata = extractRowMetadata(record)
-    for (const entry of metadataEditorEntries.value) {
-      const before = normalizeMetadataValue(metadata[entry.key])
-      const after = normalizeMetadataValue(metadataDraft.value?.[entry.key])
+  if (usesMetadataEditor.value) {
+    const originalMetadata = extractRowMetadata(record)
+    const finalMetadata = buildMetadataPayload()
+    const metadataKeys = new Set(metadataEditorEntries.value.map((entry) => entry.key))
+    for (const key of refreshProposalChangedFields.value) {
+      if (key) {
+        metadataKeys.add(key)
+      }
+    }
+    for (const key of metadataKeys) {
+      const before = normalizeMetadataValue(originalMetadata[key])
+      const after = normalizeMetadataValue(finalMetadata[key])
       if (before === after) {
         continue
       }
       changes.push({
-        label: entry.label,
+        label: metadataFieldLabel(key),
         before: formatChangeValue(before),
         after: formatChangeValue(after)
       })
@@ -579,13 +719,66 @@ async function confirmPendingChanges() {
 }
 
 const isDirectoryRecord = computed(() => !!(displayRecord.value?.is_directory ?? displayRecord.value?.isDirectory))
+const isArchiveRecord = computed(() => {
+  const record = resolveMetadataSourceRecord()
+  const direct = String(record?.item_kind || record?.itemKind || '').trim().toLowerCase()
+  if (direct === 'archive') {
+    return true
+  }
+  const metadata = extractRowMetadata(record)
+  return String(metadata?.item_kind || '').trim().toLowerCase() === 'archive'
+})
 const currentRecordExt = computed(() => inferFileExtension(inferCurrentName(displayRecord.value?.path, displayRecord.value?.filename)))
 const editorMode = computed(() => resolveManualEditorMode(repoInfo.value, displayRecord.value))
 const isMetadataEditor = computed(() => editorMode.value === 'metadata-editor')
+const proposalEditorMode = computed(() => String(refreshMetadataProposal.value?.editor_mode || '').trim().toLowerCase())
+const usesMetadataEditor = computed(() => isMetadataEditor.value || proposalEditorMode.value === 'metadata-editor')
+const metadataDisplayConfig = computed(() => resolveMetadataDisplayConfig(repoInfo.value || {}))
+const metadataDisplayEnabled = computed(() => metadataDisplayConfig.value.mode !== 'hidden')
+
+const metadataConfigSummary = computed(() => {
+  const repoTypeLabel = String(repoInfo.value?.template_name || repoInfo.value?.repo_type_key || '当前仓库').trim() || '当前仓库'
+  return `这些 metadata 信息是根据仓库配置显示的：${repoTypeLabel} 当前设置为“${metadataDisplayModeLabel(metadataDisplayConfig.value.mode)}”。`
+})
+
+const metadataConfigFieldSummary = computed(() => {
+  if (metadataDisplayConfig.value.mode === 'hidden') {
+    return '当前信息弹窗不会展示 metadata。'
+  }
+  if (metadataDisplayConfig.value.mode === 'selected') {
+    const labels = metadataDisplayConfig.value.fields.map((key) => metadataFieldLabel(key)).filter(Boolean)
+    return labels.length ? `当前允许展示/编辑的字段：${labels.join('、')}` : '当前使用默认 metadata 字段列表。'
+  }
+  return '当前会自动展示已识别到的 metadata 字段。'
+})
+
+const archiveMetadataStorageHint = computed(() => {
+  if (!isArchiveRecord.value) {
+    return ''
+  }
+  return 'Archive 的 metadata 当前保存在仓库数据库 repo.db 的 repo_iso.metadata_json 中，不写回 archive 目录或压缩包内部。'
+})
+
+const panelInfoTooltipLines = computed(() => {
+  const lines = []
+  if (metadataConfigSummary.value) {
+    lines.push(metadataConfigSummary.value)
+  }
+  if (metadataConfigFieldSummary.value) {
+    lines.push(metadataConfigFieldSummary.value)
+  }
+  if (archiveMetadataStorageHint.value) {
+    lines.push(archiveMetadataStorageHint.value)
+  }
+  return lines
+})
 
 const displayMetadataEntries = computed(() => {
+  if (!metadataDisplayEnabled.value) {
+    return []
+  }
   const metadata = extractRowMetadata(resolveMetadataSourceRecord())
-  const keys = new Set(preferredMetadataKeys)
+  const keys = new Set(metadataDisplayConfig.value.mode === 'selected' ? metadataDisplayConfig.value.fields : preferredMetadataKeys)
   for (const key of Object.keys(metadata)) {
     const normalizedValue = normalizeMetadataValue(metadata[key])
     if (!shouldExposeMetadataField(key, normalizedValue)) {
@@ -620,18 +813,31 @@ const rawPathEntries = computed(() => {
 })
 
 const metadataEditorEntries = computed(() => {
-  if (!isMetadataEditor.value) {
+  if (!usesMetadataEditor.value) {
     return []
   }
 
   const metadata = extractRowMetadata(resolveMetadataSourceRecord())
-  const keys = new Set(preferredMetadataKeys)
+  const proposalMetadata = extractRefreshProposalMetadata()
+  const keys = new Set(metadataDisplayConfig.value.mode === 'selected' ? metadataDisplayConfig.value.fields : preferredMetadataKeys)
   for (const key of Object.keys(metadata)) {
     const normalizedValue = normalizeMetadataValue(metadata[key])
     if (!shouldExposeMetadataField(key, normalizedValue)) {
       continue
     }
     keys.add(key)
+  }
+  for (const key of Object.keys(proposalMetadata)) {
+    const normalizedValue = normalizeMetadataValue(proposalMetadata[key])
+    if (!shouldExposeMetadataField(key, normalizedValue)) {
+      continue
+    }
+    keys.add(key)
+  }
+  for (const key of refreshProposalChangedFields.value) {
+    if (key) {
+      keys.add(key)
+    }
   }
 
   return Array.from(keys)
@@ -646,13 +852,31 @@ const metadataEditorEntries = computed(() => {
 
 const storedSourcePath = computed(() => rawPathEntries.value.find((entry) => entry.key === 'source_path')?.value || '')
 const canForceRestoreOriginalPath = computed(() => isDirectoryRecord.value && !!displayRecord.value?.id && !!storedSourcePath.value)
+const refreshProposalChangedFields = computed(() => {
+  const fields = refreshMetadataProposal.value?.changed_fields
+  if (!Array.isArray(fields)) {
+    return []
+  }
+  return fields.map((field) => String(field || '').trim()).filter(Boolean)
+})
+const refreshProposalSummary = computed(() => {
+  if (!refreshMetadataProposal.value?.available) {
+    return ''
+  }
+  const labels = refreshProposalChangedFields.value.map((field) => metadataFieldLabel(field))
+  if (labels.length > 0) {
+    return `刷新识别到了候选 metadata 变更：${labels.join('、')}`
+  }
+  return '刷新识别到了候选 metadata 变更，请确认后再提交。'
+})
+const refreshProposalPathHint = computed(() => String(refreshMetadataProposal.value?.analysis_path || '').trim())
 const keywordSuggestions = computed(() => {
   const record = resolveMetadataSourceRecord()
-  const metadata = extractRowMetadata(record)
+  const metadata = resolveMetadataProposalBase()
   const sourceValues = [
-    record?.path,
+    stripArchivePrefixForDialogPath(record?.path),
     record?.filename,
-    metadata?.source_path,
+    stripArchivePrefixForDialogPath(metadata?.source_path),
     metadata?.relative_path,
     normalizeMetadataValue(metadata?.path_parts),
     metadata?.original_name
@@ -718,7 +942,7 @@ function buildMetadataDrivenManualName(titleValue) {
 }
 
 function resolveMetadataEditorRenamePayload() {
-  if (!isMetadataEditor.value) {
+  if (!usesMetadataEditor.value) {
     return {
       nameMode: form.nameMode,
       manualName: form.manualName.trim()
@@ -754,19 +978,22 @@ const canSubmit = computed(() => {
   return true
 })
 
-const editActionLabel = computed(() => (isMetadataEditor.value ? '修改元数据' : '修改信息'))
+const editActionLabel = computed(() => (usesMetadataEditor.value ? '修改元数据' : '修改信息'))
 const autoRelocateHintText = computed(() => (
   autoNormalizeEnabled.value ? '修改后会自动更新目录路径' : '修改后不会自动更新目录路径'
 ))
 
 const editorModeDescription = computed(() => {
-  if (isMetadataEditor.value && !editMode.value) {
-    return '当前先展示识别结果；点击“修改元数据”后可直接修改标题、汉化组、作者、原作等字段，其中标题会作为名字来源。'
+  const configHint = metadataDisplayEnabled.value
+    ? '显示字段范围由仓库类型和当前仓库 overlay 一起决定。'
+    : '当前仓库配置未启用 metadata 展示，所以这里只显示基础信息与原始数据。'
+  if (usesMetadataEditor.value && !editMode.value) {
+    return `当前先展示识别结果；点击“修改元数据”后可直接修改标题、汉化组、作者、原作等字段，其中标题会作为名字来源。${configHint}`
   }
-  if (isMetadataEditor.value) {
-    return '当前已进入“元数据编辑”模式；直接改标题就会按新标题更新目录/文件名，不改标题则保持自动结果。上方关键词也能快速填入当前聚焦的输入框。'
+  if (usesMetadataEditor.value) {
+    return `当前已进入“元数据编辑”模式；直接改标题就会按新标题更新目录/文件名，不改标题则保持自动结果。上方关键词也能快速填入当前聚焦的输入框。${configHint}`
   }
-  return editMode.value ? '设置类型和名字策略后，点击修改会先给出变更确认，再提交到后端执行更新。' : '当前先展示这条记录的信息；如需调整，再进入修改模式。'
+  return editMode.value ? `设置类型和名字策略后，点击修改会先给出变更确认，再提交到后端执行更新。${configHint}` : `当前先展示这条记录的信息；如需调整，再进入修改模式。${configHint}`
 })
 
 function parseSizeBytes(v) {
@@ -809,6 +1036,7 @@ function formatSizeBytes(v) {
 
 function resetFormFromRecord() {
   displayRecord.value = props.isoRecord ? { ...props.isoRecord } : null
+  resetRefreshMetadataProposal()
   editMode.value = false
   activeInputTarget.value = null
   activeInputElement.value = null
@@ -829,6 +1057,18 @@ function exitEditMode() {
   editMode.value = false
   activeInputTarget.value = null
   activeInputElement.value = null
+}
+
+function openRefreshProposalEditor() {
+  if (!refreshMetadataProposal.value?.available) {
+    return
+  }
+  enterEditMode()
+}
+
+function updateRefreshMetadataProposal(proposal) {
+  refreshMetadataProposal.value = proposal && typeof proposal === 'object' ? proposal : null
+  emit('update:refreshProposal', refreshMetadataProposal.value)
 }
 
 async function parseErrorMessage(res, fallback) {
@@ -861,19 +1101,25 @@ async function fetchRepoInfoState() {
   }
 
   try {
-    const res = await fetch(`/api/repos/${props.repoId}/repo-info`)
+    const res = await fetch(`/api/repos/${props.repoId}/type-settings`)
     if (!res.ok) {
-      throw new Error(await parseErrorMessage(res, '获取 repo info 失败'))
+      throw new Error(await parseErrorMessage(res, '获取仓库类型设置失败'))
     }
 
     const data = await res.json()
-    repoInfo.value = data
-    autoNormalizeEnabled.value = !!data?.auto_normalize
+    const effective = data?.effective || {}
+    repoInfo.value = {
+      ...effective,
+      repo_type_key: data?.repo_type_key || '',
+      resolution_note: data?.resolution_note || '',
+      template_name: data?.template?.name || ''
+    }
+    autoNormalizeEnabled.value = !!effective?.auto_normalize
     syncMetadataDraft()
   } catch (e) {
     autoNormalizeEnabled.value = false
     repoInfo.value = null
-    ElMessage.error(e.message || '获取 repo info 失败')
+    ElMessage.error(e.message || '获取仓库类型设置失败')
   }
 }
 
@@ -952,7 +1198,7 @@ async function submitManualEdit() {
       name_mode: renamePayload.nameMode,
       manual_name: renamePayload.manualName
     }
-    if (isMetadataEditor.value) {
+    if (usesMetadataEditor.value) {
       payload.metadata = buildMetadataPayload()
     }
 
@@ -966,8 +1212,9 @@ async function submitManualEdit() {
     }
 
     await res.json()
+    updateRefreshMetadataProposal(null)
     emitter.emit('refresh-repo', { repoId: props.repoId })
-    ElMessage.success(isMetadataEditor.value ? '元数据修改已提交' : '手动修改已提交')
+    ElMessage.success(usesMetadataEditor.value ? '元数据修改已提交' : '手动修改已提交')
     emit('update:modelValue', false)
   } catch (e) {
     ElMessage.error(e.message || '手动修改失败')
@@ -994,8 +1241,9 @@ async function refreshRecordMetadata() {
     const data = await res.json()
     if (data?.record) {
       displayRecord.value = { ...data.record }
-      syncMetadataDraft()
     }
+    updateRefreshMetadataProposal(data?.metadata_proposal)
+    syncMetadataDraft()
 
     emitter.emit('refresh-repo', { repoId: props.repoId })
 
@@ -1009,12 +1257,22 @@ async function refreshRecordMetadata() {
     if (data?.md5_updated) parts.push('md5')
     if (data?.size_updated) parts.push(isDirectoryRecord.value ? '目录大小' : '文件大小')
 
+    if (refreshMetadataProposal.value?.available && usesMetadataEditor.value) {
+      editMode.value = true
+      syncMetadataDraft()
+      const labels = refreshProposalChangedFields.value.map((field) => metadataFieldLabel(field))
+      ElMessage.warning(labels.length
+        ? `刷新识别到了候选 metadata：${labels.join('、')}。请确认后再提交。`
+        : '刷新识别到了候选 metadata。请确认后再提交。')
+      return
+    }
+
     if (parts.length > 0) {
       ElMessage.success(`刷新完成，已补充：${parts.join('、')}`)
       return
     }
 
-    ElMessage.info(isDirectoryRecord.value ? '目录存在，已完成路径识别检查与大小刷新' : '文件存在，md5和文件大小均已存在')
+    ElMessage.warning(buildRefreshFallbackMessage(data))
   } catch (e) {
     ElMessage.error(e.message || '刷新失败')
   } finally {
@@ -1027,10 +1285,12 @@ watch(
   (visible) => {
     if (visible) {
       resetFormFromRecord()
+      refreshMetadataProposal.value = props.refreshProposal && typeof props.refreshProposal === 'object' ? props.refreshProposal : null
       fetchRepoInfoState()
       return
     }
     repoInfo.value = null
+    refreshMetadataProposal.value = null
     editMode.value = false
     activeInputTarget.value = null
     activeInputElement.value = null
@@ -1043,6 +1303,7 @@ watch(
   () => {
     autoNormalizeEnabled.value = false
     repoInfo.value = null
+    refreshMetadataProposal.value = null
     if (props.modelValue) {
       fetchRepoInfoState()
     }
@@ -1064,6 +1325,17 @@ watch(editorMode, () => {
     syncMetadataDraft()
   }
 })
+
+watch(
+  () => props.refreshProposal,
+  (proposal) => {
+    refreshMetadataProposal.value = proposal && typeof proposal === 'object' ? proposal : null
+    if (props.modelValue) {
+      syncMetadataDraft()
+    }
+  },
+  { deep: true }
+)
 </script>
 
 <style scoped>
@@ -1146,6 +1418,31 @@ watch(editorMode, () => {
   background: #ffffff;
 }
 
+.refresh-proposal-alert {
+  margin-bottom: 4px;
+}
+
+.refresh-proposal-path {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #92400e;
+  word-break: break-all;
+}
+
+.refresh-proposal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.refresh-proposal-hint {
+  font-size: 12px;
+  color: #92400e;
+}
+
 .panel-header {
   display: flex;
   align-items: center;
@@ -1154,11 +1451,39 @@ watch(editorMode, () => {
   flex-wrap: wrap;
 }
 
+.metadata-config-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .panel-title-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.panel-title-tip-icon {
+  color: #d97706;
+  font-size: 14px;
+  cursor: help;
+}
+
+.panel-tooltip-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 360px;
+  white-space: normal;
+  line-height: 1.5;
 }
 
 .panel-title-hint {

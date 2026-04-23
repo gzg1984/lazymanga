@@ -29,7 +29,7 @@ var (
 )
 
 func normalizeCreateRepoType(repoType string) (string, error) {
-	key, _, err := resolveRepoTypeForCreate(repoType)
+	key, _, err := resolveVisibleRepoTypeForCreate(repoType)
 	if err != nil {
 		return "", err
 	}
@@ -445,7 +445,9 @@ func buildRepoInfoFromRepository(repo models.Repository) (models.RepoInfo, error
 	}
 
 	initialRepoTypeKey := strings.TrimSpace(strings.ToLower(repo.RepoTypeKey))
-	if initialRepoTypeKey == "" || (repo.Basic && initialRepoTypeKey == repoTypeNone) {
+	if repo.Basic {
+		initialRepoTypeKey = manualMangaRepoTypeKey
+	} else if initialRepoTypeKey == "" {
 		initialRepoTypeKey = defaultRepoTypeKey
 	}
 
@@ -456,7 +458,7 @@ func buildRepoInfoFromRepository(repo models.Repository) (models.RepoInfo, error
 		RepoTypeKey:          initialRepoTypeKey,
 		Basic:                repo.Basic,
 		AddButton:            repo.Basic,
-		AddDirectoryButton:   false,
+		AddDirectoryButton:   repo.Basic,
 		DeleteButton:         repo.Basic,
 		AutoNormalize:        false,
 		ShowMD5:              repo.Basic,

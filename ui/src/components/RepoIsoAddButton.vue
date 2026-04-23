@@ -11,6 +11,19 @@
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="640px">
       <div class="dialog-hint">当前浏览：{{ currentDir || '/' }}</div>
+      <div v-if="scanSpecSummaryVisible" class="dialog-scan-summary">
+        <div class="dialog-scan-summary-line">
+          <span class="dialog-scan-summary-label">允许文件后缀</span>
+          <span class="dialog-scan-summary-value">{{ allowedFileExtensionsLabel }}</span>
+        </div>
+        <div v-if="directoryRuleSummaryLabel" class="dialog-scan-summary-line">
+          <span class="dialog-scan-summary-label">目录识别规则</span>
+          <span class="dialog-scan-summary-value">{{ directoryRuleSummaryLabel }}</span>
+        </div>
+      </div>
+      <div v-if="addMode === 'directory'" class="dialog-top-actions">
+        <el-button type="primary" :disabled="!canAddCurrentDirectory" @click="submitCurrentDirectory">添加当前目录</el-button>
+      </div>
       <el-table v-if="fileList.length" :data="fileList" style="width: 100%" @row-click="handleRowClick">
         <el-table-column prop="name" label="名称">
           <template #default="scope">
@@ -56,10 +69,51 @@ const dialogVisible = ref(false)
 const fileList = ref([])
 const currentDir = ref('')
 const addMode = ref('file')
+const scanSpec = ref({
+  extensions: [],
+  include_files_without_ext: false,
+  directory_rules: []
+})
 
 const showAddButton = computed(() => !!props.repoId && (addFileButtonEnabled.value || addDirectoryButtonEnabled.value))
 const dialogTitle = computed(() => (addMode.value === 'directory' ? '选择目录' : '选择文件'))
 const canAddCurrentDirectory = computed(() => addMode.value === 'directory' && String(currentDir.value || '').trim() !== '')
+const normalizedAllowedExtensions = computed(() => {
+  const values = Array.isArray(scanSpec.value?.extensions) ? scanSpec.value.extensions : []
+  const normalized = values
+    .map((item) => String(item || '').trim())
+    .filter((item) => item !== '')
+  if (scanSpec.value?.include_files_without_ext) {
+    normalized.push('无后缀文件')
+  }
+  return normalized
+})
+const allowedFileExtensionsLabel = computed(() => {
+  if (normalizedAllowedExtensions.value.length === 0) {
+    return '.iso'
+  }
+  if (normalizedAllowedExtensions.value.includes('*')) {
+    return '任意文件'
+  }
+  return normalizedAllowedExtensions.value.join(' / ')
+})
+const directoryRuleSummaryLabel = computed(() => {
+  const rules = Array.isArray(scanSpec.value?.directory_rules) ? scanSpec.value.directory_rules : []
+  const labels = rules
+    .map((rule) => {
+      const exts = Array.isArray(rule?.extensions) ? rule.extensions.filter(Boolean).join(' / ') : ''
+      const count = Number(rule?.min_file_count || 0)
+      if (!exts) {
+        return ''
+      }
+      return count > 0 ? `${exts}，至少 ${count} 个文件` : exts
+    })
+    .filter((item) => item !== '')
+  return labels.join('；')
+})
+const scanSpecSummaryVisible = computed(() => {
+  return normalizedAllowedExtensions.value.length > 0 || directoryRuleSummaryLabel.value !== ''
+})
 
 async function parseErrorMessage(res, fallback) {
   try {
@@ -88,6 +142,7 @@ async function fetchRepoInfo() {
     addFileButtonEnabled.value = false
     addDirectoryButtonEnabled.value = false
     directoryAddCautionVisible.value = false
+    scanSpec.value = { extensions: [], include_files_without_ext: false, directory_rules: [] }
     lastWarnedRepoId.value = 0
     return
   }
@@ -103,6 +158,7 @@ async function fetchRepoInfo() {
     const effective = data?.effective || {}
     addFileButtonEnabled.value = !!effective?.add_button
     addDirectoryButtonEnabled.value = !!effective?.add_directory_button
+    scanSpec.value = data?.scan_spec || { extensions: [], include_files_without_ext: false, directory_rules: [] }
 
     const cautionMessage = String(data?.directory_add_caution_message || '').trim()
     directoryAddCautionVisible.value = !!data?.directory_add_caution && !!effective?.add_directory_button
@@ -119,6 +175,7 @@ async function fetchRepoInfo() {
     addFileButtonEnabled.value = false
     addDirectoryButtonEnabled.value = false
     directoryAddCautionVisible.value = false
+    scanSpec.value = { extensions: [], include_files_without_ext: false, directory_rules: [] }
     console.error('[RepoIsoAddButton] fetchRepoInfo failed', e)
   } finally {
     loadingRepoInfo.value = false
@@ -143,8 +200,16 @@ function parentDirOf(dir) {
 
 async function fetchFiles(dir = '') {
   let url = '/api/files'
+  const params = new URLSearchParams()
+  if (props.repoId) {
+    params.set('repo_id', String(props.repoId))
+  }
   if (dir) {
-    url += `?dir=${encodeURIComponent(dir)}`
+    params.set('dir', dir)
+  }
+  const query = params.toString()
+  if (query) {
+    url += `?${query}`
   }
 
   try {
@@ -271,6 +336,42 @@ watch(
   margin-bottom: 10px;
   color: #64748b;
   font-size: 12px;
+}
+
+.dialog-scan-summary {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #dbe4ee;
+  background: #f8fbff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dialog-scan-summary-line {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dialog-scan-summary-label {
+  color: #475569;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dialog-scan-summary-value {
+  color: #0f172a;
+  word-break: break-word;
+}
+
+.dialog-top-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
 }
 
 .dialog-footer-row {

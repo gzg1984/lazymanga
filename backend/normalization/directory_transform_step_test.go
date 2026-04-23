@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"lazymanga/models"
 	"lazymanga/normalization/rulebook"
 )
 
@@ -382,5 +384,63 @@ func TestApplyDirectoryTransformWithAnalysisPreservesExistingMetadataOnNormalize
 	metadata, _ := payload["metadata"].(map[string]string)
 	if metadata["source_path"] != existing["source_path"] || metadata["original_name"] != existing["original_name"] {
 		t.Fatalf("expected payload metadata to keep original source path info, got %#v", payload)
+	}
+}
+
+func TestApplyDirectoryTransformWithAnalysisUsesTextAnalyzerFallbackForBrokenBrackets(t *testing.T) {
+	transform := &rulebook.DirectoryTransformSpec{
+		RecognizerName:     "karita-manga-filename",
+		RecognizerVersion:  "v1",
+		RenameTemplate:     `${title}`,
+		TargetPathTemplate: `${title}`,
+		MetadataFile:       ".karita.meta.json",
+		Metadata: map[string]string{
+			"title":           `${title}`,
+			"scanlator_group": `${scanlator_group}`,
+			"original_work":   `${original_work}`,
+			"source_path":     `${path}`,
+			"original_name":   `${original_name}`,
+		},
+	}
+
+	samples := []models.RepoISO{
+		{
+			FileName:     "J's 2",
+			Path:         "J's 2",
+			IsDirectory:  true,
+			MetadataJSON: `{"title":"J's 2","scanlator_group":"CE家族社","event_code":"C86","circle_name":"牛乳屋さん","author_alias":"牛乳屋さん","original_work":"女子小学生はじめました","source_path":"漫画/漫画zip/H/LittleStory/C71-C87/【CE家族社】(C86) [牛乳屋さん (牛乳のみお)] J's 2 (女子小学生はじめました)","original_name":"【CE家族社】(C86) [牛乳屋さん (牛乳のみお)] J's 2 (女子小学生はじめました)"}`,
+		},
+		{
+			FileName:     "J's 3",
+			Path:         "J's 3",
+			IsDirectory:  true,
+			MetadataJSON: `{"title":"J's 3","scanlator_group":"CE家族社","event_code":"C87","circle_name":"牛乳屋さん","author_alias":"牛乳屋さん","original_work":"女子小学生はじめました","source_path":"漫画/漫画zip/H/LittleStory/C71-C87/【CE家族社】(C87) [牛乳屋さん (牛乳のみお)] J's 3 (女子小学生はじめました)","original_name":"【CE家族社】(C87) [牛乳屋さん (牛乳のみお)] J's 3 (女子小学生はじめました)"}`,
+		},
+	}
+	model := buildRepoPathAnalysisModelFromRows(42, samples, time.Now())
+	relativePath := "漫画/待整理/【CE家族社】[(C86] [牛乳屋さん (牛乳のみお)] J's 4 (女子小学生はじめました)"
+	currentName := filepath.Base(filepath.FromSlash(relativePath))
+
+	targetName, captures, matched, err := applyDirectoryTransformWithAnalysis(transform, currentName, relativePath, model, nil)
+	if err != nil {
+		t.Fatalf("applyDirectoryTransformWithAnalysis failed: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected text analyzer fallback to match broken-bracket leaf")
+	}
+	if targetName != "J's 4" {
+		t.Fatalf("expected text analyzer fallback to infer title J's 4, got %q", targetName)
+	}
+	if captures["scanlator_group"] != "CE家族社" {
+		t.Fatalf("expected scanlator group from analyzer fallback, got %#v", captures)
+	}
+	if captures["original_work"] != "女子小学生はじめました" {
+		t.Fatalf("expected original work from analyzer fallback, got %#v", captures)
+	}
+	if captures["source_path"] != relativePath {
+		t.Fatalf("expected fallback to preserve source_path, got %#v", captures)
+	}
+	if captures["original_name"] != currentName {
+		t.Fatalf("expected fallback to preserve original_name, got %#v", captures)
 	}
 }

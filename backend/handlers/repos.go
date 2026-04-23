@@ -47,7 +47,7 @@ func EnsureBasicRepository(lazymangaDBPath string) error {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		repo = models.Repository{
 			Name:        basicRepoName,
-			RepoTypeKey: defaultRepoTypeKey,
+			RepoTypeKey: manualMangaRepoTypeKey,
 			Basic:       true,
 			RootPath:    baseRootPath,
 			DBFile:      "repo.db",
@@ -55,6 +55,9 @@ func EnsureBasicRepository(lazymangaDBPath string) error {
 		}
 		if createErr := db.Create(&repo).Error; createErr != nil {
 			return createErr
+		}
+		if err := ensureBasicRepositoryTypeManualManga(repo); err != nil {
+			return err
 		}
 		log.Printf("EnsureBasicRepository: created id=%d name=%q basic=%t root=%q dbfile=%q", repo.ID, repo.Name, repo.Basic, repo.RootPath, repo.DBFile)
 		return nil
@@ -88,12 +91,15 @@ func EnsureBasicRepository(lazymangaDBPath string) error {
 		repo.ExternalDeviceName = ""
 		changed = true
 	}
-	if strings.TrimSpace(strings.ToLower(repo.RepoTypeKey)) != defaultRepoTypeKey {
-		repo.RepoTypeKey = defaultRepoTypeKey
+	if strings.TrimSpace(strings.ToLower(repo.RepoTypeKey)) != manualMangaRepoTypeKey {
+		repo.RepoTypeKey = manualMangaRepoTypeKey
 		changed = true
 	}
 
 	if !changed {
+		if err := ensureBasicRepositoryTypeManualManga(repo); err != nil {
+			return err
+		}
 		if err := writeRepoInfoMetadata(repo, basicRepoName, true); err != nil {
 			return err
 		}
@@ -104,11 +110,24 @@ func EnsureBasicRepository(lazymangaDBPath string) error {
 	if err := db.Save(&repo).Error; err != nil {
 		return err
 	}
+	if err := ensureBasicRepositoryTypeManualManga(repo); err != nil {
+		return err
+	}
 	if err := writeRepoInfoMetadata(repo, basicRepoName, true); err != nil {
 		return err
 	}
 
 	log.Printf("EnsureBasicRepository: updated id=%d name=%q basic=%t root=%q dbfile=%q", repo.ID, repo.Name, repo.Basic, repo.RootPath, repo.DBFile)
+	return nil
+}
+
+func ensureBasicRepositoryTypeManualManga(repo models.Repository) error {
+	if !repo.Basic {
+		return nil
+	}
+	if err := applyRepoInfoPresetByType(repo, manualMangaRepoTypeKey); err != nil {
+		return fmt.Errorf("ensure basic repository repo type manual manga failed: %w", err)
+	}
 	return nil
 }
 

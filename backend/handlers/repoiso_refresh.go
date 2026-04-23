@@ -88,21 +88,31 @@ func RefreshRepoISORecord(c *gin.Context) {
 	}
 	if info.IsDir() {
 		if row.IsDirectory {
-			pathMoved, sizeUpdated, err := refreshDirectoryRecordMetadata(repo.ID, repoDB, rootAbs, &row)
+			metadataAnalysis, metadataProposal, err := buildRepoISORefreshMetadataAnalysis(repo, repoDB, repoInfo, row)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "refresh directory metadata failed: " + err.Error()})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "build refresh metadata proposal failed: " + err.Error()})
 				return
 			}
+
+			sizeUpdated, err := refreshRepoISOSizeBytes(repoDB, &row, absPath)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "refresh directory size failed: " + err.Error()})
+				return
+			}
+			row.IsMissing = false
 			populateRepoISOMetadata(&row)
 			c.JSON(http.StatusOK, gin.H{
-				"message":      "directory record refreshed",
-				"exists":       true,
-				"is_directory": true,
-				"can_delete":   false,
-				"path_moved":   pathMoved,
-				"md5_updated":  false,
-				"size_updated": sizeUpdated,
-				"record":       row,
+				"message":           "directory record refreshed",
+				"auto_normalize":    repoInfo.AutoNormalize,
+				"exists":            true,
+				"is_directory":      true,
+				"can_delete":        false,
+				"path_moved":        false,
+				"md5_updated":       false,
+				"size_updated":      sizeUpdated,
+				"metadata_analysis": metadataAnalysis,
+				"metadata_proposal": metadataProposal,
+				"record":            row,
 			})
 			return
 		}
@@ -179,6 +189,11 @@ func RefreshRepoISORecord(c *gin.Context) {
 	updates := make(map[string]interface{})
 	md5Updated := false
 	sizeUpdated := false
+	metadataAnalysis, metadataProposal, err := buildRepoISORefreshMetadataAnalysis(repo, repoDB, repoInfo, row)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "build refresh metadata proposal failed: " + err.Error()})
+		return
+	}
 	if row.IsMissing {
 		updates["is_missing"] = false
 	}
@@ -220,6 +235,8 @@ func RefreshRepoISORecord(c *gin.Context) {
 		"auto_normalize":       repoInfo.AutoNormalize,
 		"exists":               true,
 		"can_delete":           false,
+		"metadata_analysis":    metadataAnalysis,
+		"metadata_proposal":    metadataProposal,
 		"path_moved":           pathMoved,
 		"move_matched_type":    movedType,
 		"move_matched_keyword": movedKeyword,
@@ -227,6 +244,32 @@ func RefreshRepoISORecord(c *gin.Context) {
 		"size_updated":         sizeUpdated,
 		"record":               row,
 	})
+}
+
+func refreshRepoISOSizeBytes(repoDB *gorm.DB, row *models.RepoISO, absPath string) (bool, error) {
+	if row == nil {
+		return false, fmt.Errorf("row is nil")
+	}
+	size, err := normalization.CalculatePathSizeBytes(absPath)
+	if err != nil {
+		return false, err
+	}
+	updates := map[string]interface{}{}
+	sizeUpdated := row.SizeBytes != size
+	if row.IsMissing {
+		updates["is_missing"] = false
+	}
+	if sizeUpdated {
+		updates["size_bytes"] = size
+	}
+	if len(updates) > 0 {
+		if err := repoDB.Model(&models.RepoISO{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+			return false, err
+		}
+	}
+	row.IsMissing = false
+	row.SizeBytes = size
+	return sizeUpdated, nil
 }
 
 func refreshDirectoryRecordMetadata(repoID uint, repoDB *gorm.DB, rootAbs string, row *models.RepoISO) (bool, bool, error) {

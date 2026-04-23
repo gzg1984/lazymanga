@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 
 	"lazymanga/models"
 	"lazymanga/normalization/rulebook"
+	"lazymanga/normalization/textanalyzer"
 
 	"gorm.io/gorm"
 )
@@ -214,8 +216,8 @@ func applyDirectoryTransformWithAnalysis(transform *rulebook.DirectoryTransformS
 		return targetName, captures, matched, err
 	}
 
-	guess := AnalyzePathMetadata(model, relativePath)
-	merged := make(map[string]string, len(existingMetadata)+len(guess.Metadata)+len(captures))
+	guessMetadata := analyzeDirectoryPathFallback(relativePath, model)
+	merged := make(map[string]string, len(existingMetadata)+len(guessMetadata)+len(captures))
 	for key, value := range existingMetadata {
 		trimmedKey := strings.TrimSpace(key)
 		trimmedValue := strings.TrimSpace(value)
@@ -224,7 +226,7 @@ func applyDirectoryTransformWithAnalysis(transform *rulebook.DirectoryTransformS
 		}
 		merged[trimmedKey] = trimmedValue
 	}
-	for key, value := range guess.Metadata {
+	for key, value := range guessMetadata {
 		trimmedKey := strings.TrimSpace(key)
 		trimmedValue := strings.TrimSpace(value)
 		if trimmedKey == "" || trimmedValue == "" {
@@ -255,6 +257,116 @@ func applyDirectoryTransformWithAnalysis(transform *rulebook.DirectoryTransformS
 		return targetName, captures, matched, nil
 	}
 	return renderedName, renderedCaptures, true, nil
+}
+
+func analyzeDirectoryPathFallback(relativePath string, model *RepoPathAnalysisModel) map[string]string {
+	leaf := strings.TrimSpace(filepath.Base(strings.TrimRight(filepath.ToSlash(relativePath), "/")))
+	if leaf == "" {
+		return map[string]string{}
+	}
+
+	registry := buildTextAnalyzerRegistryFromRepoPathAnalysisModel(model)
+	analyzer := textanalyzer.NewAnalyzer()
+	result, err := analyzer.Analyze(textanalyzer.AnalyzeTextRequest{
+		Input:              leaf,
+		AutoRepairBrackets: true,
+		PreferLongestMatch: true,
+	}, registry)
+	if err != nil {
+		return map[string]string{}
+	}
+
+	metadata := map[string]string{}
+	for key, values := range result.Fields {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" || len(values) == 0 {
+			continue
+		}
+		trimmedValue := strings.TrimSpace(values[0])
+		if trimmedValue == "" {
+			continue
+		}
+		metadata[trimmedKey] = trimmedValue
+	}
+	if title := strings.TrimSpace(result.TitleCandidate); title != "" {
+		if best := bestBareSegment(title); best != "" {
+			metadata["title"] = best
+		} else {
+			metadata["title"] = cleanInferenceSegmentText(title)
+		}
+	}
+	if sourcePath := filepath.ToSlash(strings.TrimSpace(relativePath)); sourcePath != "" {
+		metadata["source_path"] = sourcePath
+		metadata["original_name"] = strings.TrimSpace(filepath.Base(strings.TrimRight(sourcePath, "/")))
+	}
+	applyMetadataQualityGuards(metadata)
+	applyMetadataAliases(metadata)
+	return metadata
+}
+
+func buildTextAnalyzerRegistryFromRepoPathAnalysisModel(model *RepoPathAnalysisModel) textanalyzer.AnalysisHintRegistry {
+	if model == nil || len(model.FieldValueCounts) == 0 {
+		return textanalyzer.AnalysisHintRegistry{}
+	}
+
+	fieldKeys := make([]string, 0, len(model.FieldValueCounts))
+	for field := range model.FieldValueCounts {
+		if !ShouldIncludeFieldInTextAnalyzerHints(field) {
+			continue
+		}
+		fieldKeys = append(fieldKeys, field)
+	}
+	sort.Strings(fieldKeys)
+
+	registry := textanalyzer.AnalysisHintRegistry{Fields: make([]textanalyzer.AnalysisFieldHint, 0, len(fieldKeys))}
+	for _, field := range fieldKeys {
+		valuesByKey := model.FieldValueCounts[field]
+		valueKeys := make([]string, 0, len(valuesByKey))
+		for valueKey := range valuesByKey {
+			valueKeys = append(valueKeys, valueKey)
+		}
+		sort.SliceStable(valueKeys, func(i, j int) bool {
+			leftCount := valuesByKey[valueKeys[i]]
+			rightCount := valuesByKey[valueKeys[j]]
+			if leftCount != rightCount {
+				return leftCount > rightCount
+			}
+			return valueKeys[i] < valueKeys[j]
+		})
+
+		values := make([]textanalyzer.AnalysisValueHint, 0, len(valueKeys))
+		for _, valueKey := range valueKeys {
+			canonicalValue := strings.TrimSpace(model.CanonicalValues[valueKey])
+			if canonicalValue == "" {
+				canonicalValue = valueKey
+			}
+			values = append(values, textanalyzer.AnalysisValueHint{
+				CanonicalValue: canonicalValue,
+				Aliases:        []string{canonicalValue},
+				Weight:         valuesByKey[valueKey],
+				Source:         "repo_path_analysis_model",
+			})
+		}
+
+		registry.Fields = append(registry.Fields, textanalyzer.AnalysisFieldHint{
+			Key:        field,
+			Label:      field,
+			MultiValue: field == "tags",
+			Priority:   defaultTextAnalyzerFieldPriority(field),
+			Values:     values,
+		})
+	}
+	return registry
+}
+func defaultTextAnalyzerFieldPriority(field string) int {
+	switch strings.TrimSpace(field) {
+	case "scanlator_group", "author_name", "author_alias", "circle_name", "circle":
+		return 10
+	case "comic_market", "event_code", "original_work":
+		return 9
+	default:
+		return 5
+	}
 }
 
 func renderDirectoryTransformFromMetadata(transform *rulebook.DirectoryTransformSpec, currentName string, relativePath string, metadata map[string]string) (string, map[string]string, error) {

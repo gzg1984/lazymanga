@@ -62,6 +62,37 @@
               <el-option label="元数据编辑" value="metadata-editor" />
               <el-option label="旧版类型编辑" value="legacy-type-editor" />
             </el-select>
+
+            <label class="field-label">metadata 展示</label>
+            <el-select v-model="form.metadataDisplayMode" :disabled="busy">
+              <el-option label="不显示" value="hidden" />
+              <el-option label="自动显示识别字段" value="auto" />
+              <el-option label="只显示指定字段" value="selected" />
+            </el-select>
+
+            <label class="field-label">metadata 字段</label>
+            <div>
+              <el-input
+                v-model="form.metadataDisplayFields"
+                :disabled="busy || form.metadataDisplayMode !== 'selected'"
+                type="textarea"
+                :rows="3"
+                placeholder="用逗号或换行分隔，例如 title, series_name, author_name"
+              />
+              <div class="editor-tip-inline">只在“只显示指定字段”时生效；这些字段也会成为弹窗里可编辑的 metadata 项目。</div>
+            </div>
+
+            <label class="field-label">archive 子目录</label>
+            <div>
+              <el-input v-model="form.archiveSubdir" :disabled="busy" placeholder="例如 archives" />
+              <div class="editor-tip-inline">压缩文件默认导入到这个相对路径下。</div>
+            </div>
+
+            <label class="field-label">materialized 子目录</label>
+            <div>
+              <el-input v-model="form.materializedSubdir" :disabled="busy" placeholder="/ 或例如 library" />
+              <div class="editor-tip-inline">填 `/` 表示仓库根目录本身；普通扫描会自动跳过 archive 子目录。</div>
+            </div>
           </div>
 
           <div class="settings-box">
@@ -103,6 +134,8 @@ import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import emitter from '../eventBus'
 import RuleBookSelector from './RuleBookSelector.vue'
+import { filterVisibleRepoTypes } from '../utils/repoTypeVisibility'
+import { stringifyMetadataDisplayFields } from '../utils/repoMetadataDisplay'
 
 const dialogVisible = ref(false)
 const loading = ref(false)
@@ -134,6 +167,10 @@ function createEmptyForm() {
     showSize: true,
     singleMove: true,
     manualEditorMode: 'legacy-type-editor',
+    metadataDisplayMode: 'hidden',
+    metadataDisplayFields: '',
+    archiveSubdir: 'archives',
+    materializedSubdir: '/',
     rulebookName: 'noop',
     rulebookVersion: 'v1'
   }
@@ -185,6 +222,10 @@ function selectRepoType(item) {
     showSize: !!item?.show_size,
     singleMove: !!item?.single_move,
     manualEditorMode: item?.manual_editor_mode || 'legacy-type-editor',
+    metadataDisplayMode: item?.metadata_display_mode || 'hidden',
+    metadataDisplayFields: item?.metadata_display_fields || '',
+    archiveSubdir: item?.archive_subdir || 'archives',
+    materializedSubdir: item?.materialized_subdir || '/',
     rulebookName: item?.rulebook_name || 'noop',
     rulebookVersion: item?.rulebook_version || 'v1'
   })
@@ -205,7 +246,7 @@ async function fetchRepoTypes(preferKey = '') {
     }
 
     const data = await res.json()
-    repoTypes.value = Array.isArray(data?.items) ? data.items : []
+    repoTypes.value = filterVisibleRepoTypes(Array.isArray(data?.items) ? data.items : [])
 
     const targetKey = preferKey || selectedKey.value
     const matched = repoTypes.value.find((item) => item.key === targetKey)
@@ -245,6 +286,10 @@ async function saveRepoType() {
       show_size: !!form.showSize,
       single_move: !!form.singleMove,
       manual_editor_mode: String(form.manualEditorMode || '').trim() || 'legacy-type-editor',
+      metadata_display_mode: String(form.metadataDisplayMode || '').trim() || 'hidden',
+      metadata_display_fields: stringifyMetadataDisplayFields(form.metadataDisplayFields),
+      archive_subdir: String(form.archiveSubdir || '').trim() || 'archives',
+      materialized_subdir: String(form.materializedSubdir || '').trim() || '/',
       rulebook_name: String(form.rulebookName || '').trim(),
       rulebook_version: String(form.rulebookVersion || '').trim()
     }
@@ -434,6 +479,13 @@ function openDialog() {
   color: #64748b;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.editor-tip-inline {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .footer-actions {

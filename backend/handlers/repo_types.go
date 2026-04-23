@@ -7,6 +7,7 @@ import (
 	"lazymanga/models"
 	"lazymanga/normalization"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -16,18 +17,62 @@ import (
 
 const (
 	defaultRepoTypeKey              string = "manga"
+	manualMangaRepoTypeKey          string = "manga-manual"
+	manualMangaRuleBookName         string = "manga-manual"
 	karitaRepoTypeKey               string = "karita-manga"
 	defaultRepoSettingsOverrideJSON string = "{}"
+	defaultArchiveSubdir            string = "archives"
+	defaultMaterializedSubdir       string = "/"
+	defaultArchiveExtensionsCSV     string = ".zip,.rar,.7z,.cbz,.cbr"
 	manualEditorModeLegacy          string = "legacy-type-editor"
 	manualEditorModeMetadata        string = "metadata-editor"
+	metadataDisplayModeHidden       string = "hidden"
+	metadataDisplayModeAuto         string = "auto"
+	metadataDisplayModeSelected     string = "selected"
 )
 
 var repoTypeKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
+var defaultMetadataDisplayFields = []string{
+	"title",
+	"series_name",
+	"scanlator_group",
+	"author_name",
+	"author_alias",
+	"original_work",
+	"event_code",
+	"comic_market",
+	"year",
+	"karita_id",
+}
+
+func isRepoTypeHiddenFromPublicViews(key string) bool {
+	switch strings.TrimSpace(strings.ToLower(key)) {
+	case defaultRepoTypeKey, repoTypeNone:
+		return true
+	default:
+		return false
+	}
+}
+
+func filterPublicRepoTypes(items []models.RepoTypeDef) []models.RepoTypeDef {
+	if len(items) == 0 {
+		return nil
+	}
+	filtered := make([]models.RepoTypeDef, 0, len(items))
+	for _, item := range items {
+		if isRepoTypeHiddenFromPublicViews(item.Key) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
 func defaultManualEditorModeForRepo(repoTypeKey string, ruleBookName string) string {
 	key := strings.TrimSpace(strings.ToLower(repoTypeKey))
 	rulebook := strings.TrimSpace(strings.ToLower(ruleBookName))
-	if key == defaultRepoTypeKey || key == karitaRepoTypeKey || rulebook == "karita-manga" || rulebook == "manga-files" {
+	if key == defaultRepoTypeKey || key == manualMangaRepoTypeKey || key == karitaRepoTypeKey || rulebook == manualMangaRuleBookName || rulebook == "karita-manga" || rulebook == "manga-files" {
 		return manualEditorModeMetadata
 	}
 	return manualEditorModeLegacy
@@ -58,6 +103,216 @@ func validateManualEditorMode(mode string, repoTypeKey string, ruleBookName stri
 	return "", fmt.Errorf("manual_editor_mode must be %s or %s", manualEditorModeLegacy, manualEditorModeMetadata)
 }
 
+func defaultMetadataDisplayModeForRepo(manualEditorMode string, repoTypeKey string, ruleBookName string) string {
+	mode := normalizeManualEditorMode(manualEditorMode, repoTypeKey, ruleBookName)
+	if mode == manualEditorModeMetadata {
+		return metadataDisplayModeSelected
+	}
+	return metadataDisplayModeHidden
+}
+
+func normalizeMetadataDisplayMode(mode string, manualEditorMode string, repoTypeKey string, ruleBookName string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case metadataDisplayModeHidden, "none", "off":
+		return metadataDisplayModeHidden
+	case metadataDisplayModeAuto:
+		return metadataDisplayModeAuto
+	case metadataDisplayModeSelected, "fields", "custom":
+		return metadataDisplayModeSelected
+	default:
+		return defaultMetadataDisplayModeForRepo(manualEditorMode, repoTypeKey, ruleBookName)
+	}
+}
+
+func validateMetadataDisplayMode(mode string, manualEditorMode string, repoTypeKey string, ruleBookName string) (string, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(mode))
+	if trimmed == "" {
+		return normalizeMetadataDisplayMode("", manualEditorMode, repoTypeKey, ruleBookName), nil
+	}
+	if trimmed == metadataDisplayModeHidden || trimmed == "none" || trimmed == "off" {
+		return metadataDisplayModeHidden, nil
+	}
+	if trimmed == metadataDisplayModeAuto {
+		return metadataDisplayModeAuto, nil
+	}
+	if trimmed == metadataDisplayModeSelected || trimmed == "fields" || trimmed == "custom" {
+		return metadataDisplayModeSelected, nil
+	}
+	return "", fmt.Errorf("metadata_display_mode must be %s, %s or %s", metadataDisplayModeHidden, metadataDisplayModeAuto, metadataDisplayModeSelected)
+}
+
+func defaultMetadataDisplayFieldsCSV(manualEditorMode string, repoTypeKey string, ruleBookName string) string {
+	if defaultMetadataDisplayModeForRepo(manualEditorMode, repoTypeKey, ruleBookName) != metadataDisplayModeSelected {
+		return ""
+	}
+	return strings.Join(defaultMetadataDisplayFields, ",")
+}
+
+func canonicalizeMetadataDisplayFieldsCSV(raw string) string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', '，', ';', '；', '\n', '\r', '\t':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		key := strings.TrimSpace(part)
+		if key == "" || strings.HasPrefix(key, "_") {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, key)
+	}
+	return strings.Join(result, ",")
+}
+
+func resolveMetadataDisplayFields(raw string, metadataDisplayMode string, manualEditorMode string, repoTypeKey string, ruleBookName string) string {
+	canonical := canonicalizeMetadataDisplayFieldsCSV(raw)
+	switch normalizeMetadataDisplayMode(metadataDisplayMode, manualEditorMode, repoTypeKey, ruleBookName) {
+	case metadataDisplayModeSelected:
+		if canonical != "" {
+			return canonical
+		}
+		return defaultMetadataDisplayFieldsCSV(manualEditorMode, repoTypeKey, ruleBookName)
+	default:
+		return canonical
+	}
+}
+
+func normalizeArchiveSubdir(raw string) (string, error) {
+	v := strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
+	if v == "" {
+		v = defaultArchiveSubdir
+	}
+	v = strings.Trim(v, "/")
+	if v == "" {
+		return "", errors.New("archive_subdir must not be root")
+	}
+	if strings.Contains(v, "..") {
+		return "", errors.New("archive_subdir must be a repository-relative path")
+	}
+	return v, nil
+}
+
+func normalizeMaterializedSubdir(raw string) (string, error) {
+	v := strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
+	if v == "" || v == "/" {
+		return defaultMaterializedSubdir, nil
+	}
+	v = strings.Trim(v, "/")
+	if v == "" {
+		return defaultMaterializedSubdir, nil
+	}
+	if strings.Contains(v, "..") {
+		return "", errors.New("materialized_subdir must be root or a repository-relative path")
+	}
+	return v, nil
+}
+
+func canonicalizeArchiveExtensionsCSV(raw string) string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', '，', ';', '；', '\n', '\r', '\t':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(parts) == 0 {
+		return defaultArchiveExtensionsCSV
+	}
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.ToLower(strings.TrimSpace(part))
+		if value == "" {
+			continue
+		}
+		if !strings.HasPrefix(value, ".") {
+			value = "." + value
+		}
+		if value == "." {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	if len(result) == 0 {
+		return defaultArchiveExtensionsCSV
+	}
+	return strings.Join(result, ",")
+}
+
+func validateArchiveSettings(archiveSubdir string, materializedSubdir string) (string, string, error) {
+	normalizedArchive, err := normalizeArchiveSubdir(archiveSubdir)
+	if err != nil {
+		return "", "", err
+	}
+	normalizedMaterialized, err := normalizeMaterializedSubdir(materializedSubdir)
+	if err != nil {
+		return "", "", err
+	}
+	if normalizedMaterialized != defaultMaterializedSubdir {
+		if normalizedArchive == normalizedMaterialized || strings.HasPrefix(normalizedArchive+"/", normalizedMaterialized+"/") || strings.HasPrefix(normalizedMaterialized+"/", normalizedArchive+"/") {
+			return "", "", errors.New("archive_subdir and materialized_subdir must not overlap")
+		}
+	}
+	return normalizedArchive, normalizedMaterialized, nil
+}
+
+func validateArchiveOverride(base repoTypeSettings, override repoTypeSettingsOverride) error {
+	archiveSubdir := base.ArchiveSubdir
+	if override.ArchiveSubdir != nil {
+		archiveSubdir = *override.ArchiveSubdir
+	}
+	materializedSubdir := base.MaterializedSubdir
+	if override.MaterializedSubdir != nil {
+		materializedSubdir = *override.MaterializedSubdir
+	}
+	_, _, err := validateArchiveSettings(archiveSubdir, materializedSubdir)
+	return err
+}
+
+type repoArchivePaths struct {
+	ArchiveSubdir      string
+	MaterializedSubdir string
+	ArchiveRootAbs     string
+	MaterializedRootAbs string
+	ExcludeRootAbsPaths []string
+}
+
+func resolveRepoArchivePaths(rootAbs string, settings repoTypeSettings) (repoArchivePaths, error) {
+	archiveSubdir, materializedSubdir, err := validateArchiveSettings(settings.ArchiveSubdir, settings.MaterializedSubdir)
+	if err != nil {
+		return repoArchivePaths{}, err
+	}
+	paths := repoArchivePaths{
+		ArchiveSubdir:      archiveSubdir,
+		MaterializedSubdir: materializedSubdir,
+		ArchiveRootAbs:     filepath.Join(rootAbs, filepath.FromSlash(archiveSubdir)),
+	}
+	if materializedSubdir == defaultMaterializedSubdir {
+		paths.MaterializedRootAbs = rootAbs
+		paths.ExcludeRootAbsPaths = []string{paths.ArchiveRootAbs}
+		return paths, nil
+	}
+	paths.MaterializedRootAbs = filepath.Join(rootAbs, filepath.FromSlash(materializedSubdir))
+	return paths, nil
+}
+
 type repoTypeSettings struct {
 	AddButton          bool   `json:"add_button"`
 	AddDirectoryButton bool   `json:"add_directory_button"`
@@ -67,6 +322,12 @@ type repoTypeSettings struct {
 	ShowSize           bool   `json:"show_size"`
 	SingleMove         bool   `json:"single_move"`
 	ManualEditorMode   string `json:"manual_editor_mode"`
+	MetadataDisplayMode   string `json:"metadata_display_mode"`
+	MetadataDisplayFields string `json:"metadata_display_fields"`
+	ArchiveSubdir      string `json:"archive_subdir"`
+	MaterializedSubdir string `json:"materialized_subdir"`
+	ArchiveExtensions  string `json:"archive_extensions"`
+	ArchiveReadInnerLayout bool `json:"archive_read_inner_layout"`
 	RuleBookName       string `json:"rulebook_name"`
 	RuleBookVersion    string `json:"rulebook_version"`
 }
@@ -80,6 +341,12 @@ type repoTypeSettingsOverride struct {
 	ShowSize           *bool   `json:"show_size,omitempty"`
 	SingleMove         *bool   `json:"single_move,omitempty"`
 	ManualEditorMode   *string `json:"manual_editor_mode,omitempty"`
+	MetadataDisplayMode   *string `json:"metadata_display_mode,omitempty"`
+	MetadataDisplayFields *string `json:"metadata_display_fields,omitempty"`
+	ArchiveSubdir      *string `json:"archive_subdir,omitempty"`
+	MaterializedSubdir *string `json:"materialized_subdir,omitempty"`
+	ArchiveExtensions  *string `json:"archive_extensions,omitempty"`
+	ArchiveReadInnerLayout *bool `json:"archive_read_inner_layout,omitempty"`
 	RuleBookName       *string `json:"rulebook_name,omitempty"`
 	RuleBookVersion    *string `json:"rulebook_version,omitempty"`
 }
@@ -98,6 +365,12 @@ type repoTypeUpsertPayload struct {
 	ShowSize           *bool  `json:"show_size"`
 	SingleMove         *bool  `json:"single_move"`
 	ManualEditorMode   string `json:"manual_editor_mode"`
+	MetadataDisplayMode   string `json:"metadata_display_mode"`
+	MetadataDisplayFields string `json:"metadata_display_fields"`
+	ArchiveSubdir      string `json:"archive_subdir"`
+	MaterializedSubdir string `json:"materialized_subdir"`
+	ArchiveExtensions  string `json:"archive_extensions"`
+	ArchiveReadInnerLayout *bool `json:"archive_read_inner_layout"`
 	RuleBookName       string `json:"rulebook_name"`
 	RuleBookVersion    string `json:"rulebook_version"`
 }
@@ -123,7 +396,36 @@ func defaultRepoTypeDefinitions() []models.RepoTypeDef {
 			ShowSize:           true,
 			SingleMove:         true,
 			ManualEditorMode:   manualEditorModeLegacy,
+			MetadataDisplayMode:   metadataDisplayModeHidden,
+			MetadataDisplayFields: "",
+			ArchiveSubdir:      defaultArchiveSubdir,
+			MaterializedSubdir: defaultMaterializedSubdir,
+			ArchiveExtensions:  defaultArchiveExtensionsCSV,
+			ArchiveReadInnerLayout: true,
 			RuleBookName:       "noop",
+			RuleBookVersion:    "v1",
+		},
+		{
+			Key:                manualMangaRepoTypeKey,
+			Name:               "手工漫画管理",
+			Description:        "不做自动整理，但按漫画文件与图片目录规则进行筛选和索引的仓库模板",
+			Enabled:            true,
+			SortOrder:          15,
+			AddButton:          true,
+			AddDirectoryButton: true,
+			DeleteButton:       true,
+			AutoNormalize:      false,
+			ShowMD5:            false,
+			ShowSize:           true,
+			SingleMove:         true,
+			ManualEditorMode:   manualEditorModeMetadata,
+			MetadataDisplayMode:   metadataDisplayModeSelected,
+			MetadataDisplayFields: strings.Join(defaultMetadataDisplayFields, ","),
+			ArchiveSubdir:      defaultArchiveSubdir,
+			MaterializedSubdir: defaultMaterializedSubdir,
+			ArchiveExtensions:  defaultArchiveExtensionsCSV,
+			ArchiveReadInnerLayout: true,
+			RuleBookName:       manualMangaRuleBookName,
 			RuleBookVersion:    "v1",
 		},
 		{
@@ -140,6 +442,12 @@ func defaultRepoTypeDefinitions() []models.RepoTypeDef {
 			ShowSize:           true,
 			SingleMove:         true,
 			ManualEditorMode:   manualEditorModeMetadata,
+			MetadataDisplayMode:   metadataDisplayModeSelected,
+			MetadataDisplayFields: strings.Join(defaultMetadataDisplayFields, ","),
+			ArchiveSubdir:      defaultArchiveSubdir,
+			MaterializedSubdir: defaultMaterializedSubdir,
+			ArchiveExtensions:  defaultArchiveExtensionsCSV,
+			ArchiveReadInnerLayout: true,
 			RuleBookName:       "manga-files",
 			RuleBookVersion:    "v1",
 		},
@@ -157,6 +465,12 @@ func defaultRepoTypeDefinitions() []models.RepoTypeDef {
 			ShowSize:           true,
 			SingleMove:         true,
 			ManualEditorMode:   manualEditorModeMetadata,
+			MetadataDisplayMode:   metadataDisplayModeSelected,
+			MetadataDisplayFields: strings.Join(defaultMetadataDisplayFields, ","),
+			ArchiveSubdir:      defaultArchiveSubdir,
+			MaterializedSubdir: defaultMaterializedSubdir,
+			ArchiveExtensions:  defaultArchiveExtensionsCSV,
+			ArchiveReadInnerLayout: true,
 			RuleBookName:       "karita-manga",
 			RuleBookVersion:    "v1",
 		},/*
@@ -212,6 +526,12 @@ func EnsureDefaultRepoTypes() error {
 		existing.ShowSize = item.ShowSize
 		existing.SingleMove = item.SingleMove
 		existing.ManualEditorMode = item.ManualEditorMode
+		existing.MetadataDisplayMode = item.MetadataDisplayMode
+		existing.MetadataDisplayFields = item.MetadataDisplayFields
+		existing.ArchiveSubdir = item.ArchiveSubdir
+		existing.MaterializedSubdir = item.MaterializedSubdir
+		existing.ArchiveExtensions = item.ArchiveExtensions
+		existing.ArchiveReadInnerLayout = item.ArchiveReadInnerLayout
 		existing.RuleBookName = item.RuleBookName
 		existing.RuleBookVersion = item.RuleBookVersion
 		if saveErr := db.Save(&existing).Error; saveErr != nil {
@@ -235,15 +555,20 @@ func normalizeRepoTypeKey(key string) (string, error) {
 
 func inferRepoTypeKeyFromInfo(info models.RepoInfo, repo models.Repository) string {
 	isBasic := info.Basic || repo.Basic
-	if v := strings.TrimSpace(strings.ToLower(info.RepoTypeKey)); v != "" {
-		if !(isBasic && v == repoTypeNone) {
+	if isBasic {
+		if v := strings.TrimSpace(strings.ToLower(info.RepoTypeKey)); v != "" && v != repoTypeNone {
 			return v
 		}
+		if v := strings.TrimSpace(strings.ToLower(repo.RepoTypeKey)); v != "" && v != repoTypeNone {
+			return v
+		}
+		return manualMangaRepoTypeKey
+	}
+	if v := strings.TrimSpace(strings.ToLower(info.RepoTypeKey)); v != "" {
+		return v
 	}
 	if v := strings.TrimSpace(strings.ToLower(repo.RepoTypeKey)); v != "" {
-		if !(isBasic && v == repoTypeNone) {
-			return v
-		}
+		return v
 	}
 	if info.AutoNormalize && !info.AddButton && !info.DeleteButton && !info.ShowMD5 && !info.ShowSize && !info.SingleMove {
 		return repoTypeOS
@@ -252,6 +577,11 @@ func inferRepoTypeKeyFromInfo(info models.RepoInfo, repo models.Repository) stri
 }
 
 func repoTypeDefToSettings(def models.RepoTypeDef) repoTypeSettings {
+	archiveSubdir, materializedSubdir, err := validateArchiveSettings(def.ArchiveSubdir, def.MaterializedSubdir)
+	if err != nil {
+		archiveSubdir = defaultArchiveSubdir
+		materializedSubdir = defaultMaterializedSubdir
+	}
 	return repoTypeSettings{
 		AddButton:          def.AddButton,
 		AddDirectoryButton: def.AddDirectoryButton,
@@ -261,6 +591,12 @@ func repoTypeDefToSettings(def models.RepoTypeDef) repoTypeSettings {
 		ShowSize:           def.ShowSize,
 		SingleMove:         def.SingleMove,
 		ManualEditorMode:   normalizeManualEditorMode(def.ManualEditorMode, def.Key, def.RuleBookName),
+		MetadataDisplayMode:   normalizeMetadataDisplayMode(def.MetadataDisplayMode, def.ManualEditorMode, def.Key, def.RuleBookName),
+		MetadataDisplayFields: resolveMetadataDisplayFields(def.MetadataDisplayFields, def.MetadataDisplayMode, def.ManualEditorMode, def.Key, def.RuleBookName),
+		ArchiveSubdir:      archiveSubdir,
+		MaterializedSubdir: materializedSubdir,
+		ArchiveExtensions:  canonicalizeArchiveExtensionsCSV(def.ArchiveExtensions),
+		ArchiveReadInnerLayout: def.ArchiveReadInnerLayout,
 		RuleBookName:       strings.TrimSpace(def.RuleBookName),
 		RuleBookVersion:    strings.TrimSpace(def.RuleBookVersion),
 	}
@@ -277,6 +613,12 @@ func repoInfoFallbackSettings(info models.RepoInfo) repoTypeSettings {
 		ShowSize:           info.ShowSize,
 		SingleMove:         info.SingleMove,
 		ManualEditorMode:   normalizeManualEditorMode(info.ManualEditorMode, info.RepoTypeKey, binding.Name),
+		MetadataDisplayMode:   defaultMetadataDisplayModeForRepo(info.ManualEditorMode, info.RepoTypeKey, binding.Name),
+		MetadataDisplayFields: defaultMetadataDisplayFieldsCSV(info.ManualEditorMode, info.RepoTypeKey, binding.Name),
+		ArchiveSubdir:      defaultArchiveSubdir,
+		MaterializedSubdir: defaultMaterializedSubdir,
+		ArchiveExtensions:  defaultArchiveExtensionsCSV,
+		ArchiveReadInnerLayout: true,
 		RuleBookName:       binding.Name,
 		RuleBookVersion:    binding.Version,
 	}
@@ -315,6 +657,36 @@ func applyRepoSettingsOverride(base repoTypeSettings, override repoTypeSettingsO
 		result.ManualEditorMode = normalizeManualEditorMode(*override.ManualEditorMode, "", result.RuleBookName)
 	} else {
 		result.ManualEditorMode = normalizeManualEditorMode(result.ManualEditorMode, "", result.RuleBookName)
+	}
+	if override.MetadataDisplayMode != nil {
+		result.MetadataDisplayMode = normalizeMetadataDisplayMode(*override.MetadataDisplayMode, result.ManualEditorMode, "", result.RuleBookName)
+	} else {
+		result.MetadataDisplayMode = normalizeMetadataDisplayMode(result.MetadataDisplayMode, result.ManualEditorMode, "", result.RuleBookName)
+	}
+	metadataDisplayFields := result.MetadataDisplayFields
+	if override.MetadataDisplayFields != nil {
+		metadataDisplayFields = *override.MetadataDisplayFields
+	}
+	result.MetadataDisplayFields = resolveMetadataDisplayFields(metadataDisplayFields, result.MetadataDisplayMode, result.ManualEditorMode, "", result.RuleBookName)
+	archiveSubdir := result.ArchiveSubdir
+	if override.ArchiveSubdir != nil {
+		archiveSubdir = *override.ArchiveSubdir
+	}
+	materializedSubdir := result.MaterializedSubdir
+	if override.MaterializedSubdir != nil {
+		materializedSubdir = *override.MaterializedSubdir
+	}
+	if normalizedArchive, normalizedMaterialized, err := validateArchiveSettings(archiveSubdir, materializedSubdir); err == nil {
+		result.ArchiveSubdir = normalizedArchive
+		result.MaterializedSubdir = normalizedMaterialized
+	}
+	archiveExtensions := result.ArchiveExtensions
+	if override.ArchiveExtensions != nil {
+		archiveExtensions = *override.ArchiveExtensions
+	}
+	result.ArchiveExtensions = canonicalizeArchiveExtensionsCSV(archiveExtensions)
+	if override.ArchiveReadInnerLayout != nil {
+		result.ArchiveReadInnerLayout = *override.ArchiveReadInnerLayout
 	}
 	return result
 }
@@ -393,6 +765,35 @@ func resolveRepoTypeForCreate(repoType string) (string, models.RepoTypeDef, erro
 		return "", models.RepoTypeDef{}, fmt.Errorf("repo type %q is disabled", key)
 	}
 	return key, def, nil
+}
+
+func normalizePublicRepoTypeKeyForCreate(repoType string) (string, error) {
+	key := strings.TrimSpace(strings.ToLower(repoType))
+	if key == "" {
+		return manualMangaRepoTypeKey, nil
+	}
+
+	normalizedKey, err := normalizeRepoTypeKey(key)
+	if err != nil {
+		return "", err
+	}
+	if isRepoTypeHiddenFromPublicViews(normalizedKey) {
+		return "", fmt.Errorf("repo type %q is not available for new repositories", normalizedKey)
+	}
+	return normalizedKey, nil
+}
+
+func resolveVisibleRepoTypeForCreate(repoType string) (string, models.RepoTypeDef, error) {
+	key, err := normalizePublicRepoTypeKeyForCreate(repoType)
+	if err != nil {
+		return "", models.RepoTypeDef{}, err
+	}
+
+	resolvedKey, def, err := resolveRepoTypeForCreate(key)
+	if err != nil {
+		return "", models.RepoTypeDef{}, err
+	}
+	return resolvedKey, def, nil
 }
 
 func applyEffectiveSettingsToRepoInfo(info *models.RepoInfo, repoTypeKey string, override repoTypeSettingsOverride, effective repoTypeSettings) (bool, error) {
@@ -488,6 +889,7 @@ func ListRepoTypes(c *gin.Context) {
 	}
 
 	includeDisabled := strings.EqualFold(strings.TrimSpace(c.Query("include_disabled")), "true") || c.Query("all") == "1"
+	includeHidden := strings.EqualFold(strings.TrimSpace(c.Query("include_hidden")), "true")
 	query := db.Model(&models.RepoTypeDef{}).Order("sort_order asc").Order("id asc")
 	if !includeDisabled {
 		query = query.Where("enabled = ?", true)
@@ -497,6 +899,9 @@ func ListRepoTypes(c *gin.Context) {
 	if err := query.Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query repo types failed: " + err.Error()})
 		return
+	}
+	if !includeHidden {
+		items = filterPublicRepoTypes(items)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -539,6 +944,18 @@ func CreateRepoType(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	metadataDisplayMode, err := validateMetadataDisplayMode(req.MetadataDisplayMode, manualEditorMode, key, rulebookName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	metadataDisplayFields := resolveMetadataDisplayFields(req.MetadataDisplayFields, metadataDisplayMode, manualEditorMode, key, rulebookName)
+	archiveSubdir, materializedSubdir, err := validateArchiveSettings(req.ArchiveSubdir, req.MaterializedSubdir)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	archiveExtensions := canonicalizeArchiveExtensionsCSV(req.ArchiveExtensions)
 	if _, _, err := normalization.ValidateRuleBookSpec(rulebookName, rulebookVersion); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "rulebook spec invalid: " + err.Error()})
 		return
@@ -568,6 +985,12 @@ func CreateRepoType(c *gin.Context) {
 		ShowSize:           req.ShowSize != nil && *req.ShowSize,
 		SingleMove:         req.SingleMove != nil && *req.SingleMove,
 		ManualEditorMode:   manualEditorMode,
+		MetadataDisplayMode:   metadataDisplayMode,
+		MetadataDisplayFields: metadataDisplayFields,
+		ArchiveSubdir:      archiveSubdir,
+		MaterializedSubdir: materializedSubdir,
+		ArchiveExtensions:  archiveExtensions,
+		ArchiveReadInnerLayout: req.ArchiveReadInnerLayout == nil || *req.ArchiveReadInnerLayout,
 		RuleBookName:       rulebookName,
 		RuleBookVersion:    rulebookVersion,
 	}
@@ -645,6 +1068,40 @@ func UpdateRepoType(c *gin.Context) {
 		}
 		item.ManualEditorMode = manualEditorMode
 	}
+	if req.MetadataDisplayMode != "" {
+		metadataDisplayMode, err := validateMetadataDisplayMode(req.MetadataDisplayMode, item.ManualEditorMode, item.Key, item.RuleBookName)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		item.MetadataDisplayMode = metadataDisplayMode
+	}
+	if req.MetadataDisplayFields != "" {
+		item.MetadataDisplayFields = canonicalizeMetadataDisplayFieldsCSV(req.MetadataDisplayFields)
+	}
+	archiveSubdir := item.ArchiveSubdir
+	if req.ArchiveSubdir != "" {
+		archiveSubdir = req.ArchiveSubdir
+	}
+	materializedSubdir := item.MaterializedSubdir
+	if req.MaterializedSubdir != "" {
+		materializedSubdir = req.MaterializedSubdir
+	}
+	archiveSubdir, materializedSubdir, err = validateArchiveSettings(archiveSubdir, materializedSubdir)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	item.ArchiveSubdir = archiveSubdir
+	item.MaterializedSubdir = materializedSubdir
+	if req.ArchiveExtensions != "" {
+		item.ArchiveExtensions = canonicalizeArchiveExtensionsCSV(req.ArchiveExtensions)
+	} else if strings.TrimSpace(item.ArchiveExtensions) == "" {
+		item.ArchiveExtensions = defaultArchiveExtensionsCSV
+	}
+	if req.ArchiveReadInnerLayout != nil {
+		item.ArchiveReadInnerLayout = *req.ArchiveReadInnerLayout
+	}
 	if req.RuleBookName != "" || req.RuleBookVersion != "" {
 		rulebookName, rulebookVersion, err := normalizeBindingInput(req.RuleBookName, req.RuleBookVersion)
 		if err != nil {
@@ -661,6 +1118,8 @@ func UpdateRepoType(c *gin.Context) {
 	}
 
 	item.ManualEditorMode = normalizeManualEditorMode(item.ManualEditorMode, item.Key, item.RuleBookName)
+	item.MetadataDisplayMode = normalizeMetadataDisplayMode(item.MetadataDisplayMode, item.ManualEditorMode, item.Key, item.RuleBookName)
+	item.MetadataDisplayFields = resolveMetadataDisplayFields(item.MetadataDisplayFields, item.MetadataDisplayMode, item.ManualEditorMode, item.Key, item.RuleBookName)
 	if strings.TrimSpace(item.Name) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
@@ -719,7 +1178,7 @@ func DeleteRepoType(c *gin.Context) {
 }
 
 func GetRepoTypeSettings(c *gin.Context) {
-	repo, _, info, ok := readRepoInfoByID(c)
+	repo, repoDB, info, ok := readRepoInfoByID(c)
 	if !ok {
 		return
 	}
@@ -748,6 +1207,8 @@ func GetRepoTypeSettings(c *gin.Context) {
 		"directory_add_caution":         directoryAddCautionMessage != "",
 		"directory_add_caution_message": directoryAddCautionMessage,
 	}
+	scanSpec := normalization.GetRuleBookScanSpecForRepo(repo.ID, repoDB)
+	resp["scan_spec"] = scanSpec
 	if def != nil {
 		resp["template"] = def
 	}
@@ -786,6 +1247,10 @@ func UpdateRepoTypeSettings(c *gin.Context) {
 	override, err := parseRepoSettingsOverrideRaw(req.SettingsOverride)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid settings_override: " + err.Error()})
+		return
+	}
+	if err := validateArchiveOverride(repoTypeDefToSettings(def), override); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 

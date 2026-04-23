@@ -114,6 +114,7 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import emitter from '../eventBus'
+import { filterVisibleRepoTypes } from '../utils/repoTypeVisibility'
 
 const props = defineProps({
   modelValue: {
@@ -135,7 +136,7 @@ const folderList = ref([])
 const repoTypeOptions = ref([])
 const browseDir = ref('')
 const createForm = ref({
-  repoType: 'manga',
+  repoType: '',
   isInternal: true,
   externalDeviceName: '',
   rootPath: '',
@@ -157,7 +158,7 @@ const selectedRepoTypeOption = computed(() => {
 })
 
 const visibleRepoTypeOptions = computed(() => {
-  return repoTypeOptions.value.filter((item) => item.enabled !== false)
+  return filterVisibleRepoTypes(repoTypeOptions.value).filter((item) => item.enabled !== false)
 })
 
 const selectedRepoTypeDescription = computed(() => {
@@ -250,14 +251,10 @@ async function fetchRepos() {
 
 function getDefaultRepoTypeKey(items = visibleRepoTypeOptions.value) {
   if (!Array.isArray(items) || items.length === 0) {
-    return 'manga'
+    return ''
   }
-
-  const preferred = items.find((item) => item.key === 'manga' && item.enabled !== false)
-  if (preferred) return preferred.key
-
   const fallback = items.find((item) => item.enabled !== false)
-  return fallback?.key || items[0]?.key || 'manga'
+  return fallback?.key || items[0]?.key || ''
 }
 
 async function fetchRepoTypes() {

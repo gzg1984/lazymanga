@@ -1,5 +1,24 @@
 <template>
   <div class="iso-table-wrap p-6 border-4 border-slate-400 rounded-lg bg-slate-100">
+    <div v-if="refreshProposalQueueCount > 0" class="repoiso-toolbar">
+      <div class="repoiso-toolbar-summary">
+        <span class="repoiso-toolbar-title">刷新提案</span>
+        <span class="repoiso-toolbar-hint">
+          {{ `当前有 ${refreshProposalQueueCount} 条待确认的 metadata 提案` }}
+        </span>
+      </div>
+      <div class="repoiso-toolbar-actions">
+        <el-button
+          size="small"
+          type="warning"
+          plain
+          @click="refreshProposalQueueVisible = true"
+        >
+          查看提案队列<span v-if="refreshProposalQueueCount > 0">（{{ refreshProposalQueueCount }}）</span>
+        </el-button>
+      </div>
+    </div>
+
     <el-table
       v-loading="loading"
       :data="filteredRepoIsoList"
@@ -7,7 +26,32 @@
       style="width: 100%"
       border
     >
-      <el-table-column label="类型" width="120" align="center">
+      <el-table-column width="170" align="center">
+        <template #header>
+          <div class="type-column-header">
+            <span class="type-column-title">类型</span>
+            <el-dropdown
+              v-if="showLegacyTypeFilters"
+              trigger="click"
+              size="small"
+              @command="handleTypeFilterCommand"
+            >
+              <el-button class="type-filter-trigger" size="small" :type="activeTypeFilter === 'all' ? 'primary' : 'info'" plain>
+                {{ typeFilterButtonLabel }}
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="all">全部</el-dropdown-item>
+                  <el-dropdown-item v-if="showDirectoryFilter" command="directory">目录</el-dropdown-item>
+                  <el-dropdown-item v-if="showOSFilter" command="os">OS</el-dropdown-item>
+                  <el-dropdown-item v-if="showEntertainmentFilter" command="entertainment">娱乐</el-dropdown-item>
+                  <el-dropdown-item v-if="showArchiveFilter" command="archive">Archive</el-dropdown-item>
+                  <el-dropdown-item v-if="showOthersFilter" command="others">Others</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </template>
         <template #default="scope">
           <el-tag size="small" :type="elementTagType(scope.row)">{{ formatElementType(scope.row) }}</el-tag>
         </template>
@@ -15,72 +59,6 @@
       <el-table-column prop="path" min-width="360">
         <template #header>
           <div class="type-filter-actions">
-            <template v-if="showLegacyTypeFilters">
-              <el-button
-                size="small"
-                :type="activeTypeFilter === 'all' ? 'primary' : 'info'"
-                :plain="activeTypeFilter !== 'all'"
-                @click.stop="setTypeFilter('all')"
-              >
-                全部
-              </el-button>
-              <el-dropdown
-                v-if="showOSFilter"
-                class="os-filter-dropdown"
-                split-button
-                trigger="click"
-                size="small"
-                :type="activeTypeFilter === 'os' ? 'primary' : 'info'"
-                @click.stop="activateOSFilter"
-                @command="handleOSDistroCommand"
-              >
-                {{ osFilterButtonLabel }}
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item :command="OS_DISTRO_ALL_COMMAND">
-                      <div class="os-distro-option">
-                        <span>全部发行版 ({{ osTotalCount }})</span>
-                        <span class="os-distro-option-meta">
-                          <el-icon v-if="activeOSDistroFilter === ''"><Check /></el-icon>
-                        </span>
-                      </div>
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-for="option in osDistroOptions"
-                      :key="option.value"
-                      :command="option.value"
-                    >
-                      <div class="os-distro-option">
-                        <span>{{ option.label }}</span>
-                        <span class="os-distro-option-meta">
-                          <span class="os-distro-count">{{ option.count }}</span>
-                          <el-icon v-if="activeOSDistroFilter === option.value"><Check /></el-icon>
-                        </span>
-                      </div>
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-              <el-button
-                v-if="showEntertainmentFilter"
-                size="small"
-                :type="activeTypeFilter === 'entertainment' ? 'primary' : 'info'"
-                :plain="activeTypeFilter !== 'entertainment'"
-                @click.stop="setTypeFilter('entertainment')"
-              >
-                娱乐
-              </el-button>
-              <el-button
-                v-if="showOthersFilter"
-                size="small"
-                :type="activeTypeFilter === 'others' ? 'primary' : 'info'"
-                :plain="activeTypeFilter !== 'others'"
-                @click.stop="setTypeFilter('others')"
-              >
-                Others
-              </el-button>
-            </template>
-
             <div v-if="showMetadataFilter" class="metadata-filter-actions">
               <el-select
                 :model-value="activeMetadataKeyFilter"
@@ -121,17 +99,64 @@
         <template #default="scope">
           <div v-if="isDirectoryRow(scope.row)" :class="['others-path-cell', { 'path-missing': isRowMissing(scope.row) }]">
             <span class="others-badge">目录</span>
-            <span class="others-full-path">{{ scope.row.path }}</span>
-            <div v-if="metadataPreviewEntries(scope.row).length" class="metadata-preview-row">
-              <el-tag
-                v-for="entry in metadataPreviewEntries(scope.row)"
-                :key="`${scope.row.id}-${entry.key}`"
-                size="small"
-                type="info"
-                effect="plain"
-              >
-                {{ entry.label }}：{{ entry.value }}
-              </el-tag>
+            <div class="path-preview-stack">
+	          <span class="others-primary-name">{{ resolvePrimaryDisplayLabel(scope.row) }}</span>
+              <div v-if="metadataPreviewEntries(scope.row).length" class="metadata-preview-row">
+                <el-tag
+                  v-for="entry in metadataPreviewEntries(scope.row)"
+                  :key="`${scope.row.id}-${entry.key}`"
+                  class="metadata-preview-tag"
+                  :title="`${entry.label}：${entry.value}`"
+                  size="small"
+                  type="info"
+                  effect="plain"
+                >
+                  {{ entry.label }}：{{ entry.value }}
+                </el-tag>
+                <el-tag
+                  v-if="hasRefreshProposal(scope.row)"
+                  class="metadata-preview-tag metadata-proposal-tag"
+                  size="small"
+                  type="danger"
+                  effect="plain"
+                >
+                  待确认提案
+                </el-tag>
+              </div>
+              <div v-else-if="hasRefreshProposal(scope.row)" class="metadata-preview-row">
+                <el-tag class="metadata-preview-tag metadata-proposal-tag" size="small" type="danger" effect="plain">待确认提案</el-tag>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="isArchiveItem(scope.row)" :class="['others-path-cell', { 'path-missing': isRowMissing(scope.row) }]">
+            <span class="archive-badge">Archive</span>
+            <div class="path-preview-stack">
+	          <span class="others-primary-name">{{ resolvePrimaryDisplayLabel(scope.row) }}</span>
+              <div v-if="metadataPreviewEntries(scope.row).length" class="metadata-preview-row">
+                <el-tag
+                  v-for="entry in metadataPreviewEntries(scope.row)"
+                  :key="`${scope.row.id}-${entry.key}`"
+                  class="metadata-preview-tag"
+                  :title="`${entry.label}：${entry.value}`"
+                  size="small"
+                  type="warning"
+                  effect="plain"
+                >
+                  {{ entry.label }}：{{ entry.value }}
+                </el-tag>
+                <el-tag
+                  v-if="hasRefreshProposal(scope.row)"
+                  class="metadata-preview-tag metadata-proposal-tag"
+                  size="small"
+                  type="danger"
+                  effect="plain"
+                >
+                  待确认提案
+                </el-tag>
+              </div>
+              <div v-else-if="hasRefreshProposal(scope.row)" class="metadata-preview-row">
+                <el-tag class="metadata-preview-tag metadata-proposal-tag" size="small" type="danger" effect="plain">待确认提案</el-tag>
+              </div>
             </div>
           </div>
           <div v-else-if="isOSItem(scope.row)" :class="['os-path-cell', { 'path-missing': isRowMissing(scope.row) }]">
@@ -144,9 +169,11 @@
           </div>
           <div v-else-if="isOtherItem(scope.row)" :class="['others-path-cell', { 'path-missing': isRowMissing(scope.row) }]">
             <span class="others-badge">Others</span>
-            <span class="others-full-path">{{ scope.row.path }}</span>
+            <div class="path-preview-stack">
+	          <span class="others-primary-name">{{ resolvePrimaryDisplayLabel(scope.row) }}</span>
+            </div>
           </div>
-          <span v-else :class="{ 'path-missing': isRowMissing(scope.row) }">{{ scope.row.path }}</span>
+          <span v-else :class="{ 'path-missing': isRowMissing(scope.row) }">{{ formatDisplayPath(scope.row) }}</span>
         </template>
       </el-table-column>
       <el-table-column v-if="showMD5Column" label="MD5" min-width="280">
@@ -154,16 +181,17 @@
           <span class="meta-text">{{ isDirectoryRow(scope.row) ? '目录' : (String(scope.row?.md5 || '').trim() || '待计算') }}</span>
         </template>
       </el-table-column>
-      <el-table-column v-if="showSizeColumn" label="大小" width="140" align="right">
+      <el-table-column v-if="showSizeColumn" label="大小" width="112" align="right" class-name="size-column" header-cell-class-name="size-column-header">
         <template #default="scope">
           <span class="meta-text">{{ formatSize(scope.row) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="320" align="center">
+      <el-table-column label="操作" width="276" align="center" class-name="action-column" header-cell-class-name="action-column-header">
         <template #default="scope">
           <div class="row-actions">
             <el-button
               v-if="!isRowMissing(scope.row) && !isDirectoryRow(scope.row)"
+              class="download-action-button"
               size="small"
               type="primary"
               plain
@@ -199,6 +227,7 @@
               :disabled="isRowDownloading(scope.row)"
               @click="openSingleMoveDialog(scope.row)"
             />
+            <span v-if="hasRefreshProposal(scope.row)" class="row-proposal-hint">待确认提案</span>
             <span v-if="isRowMissing(scope.row)" class="row-missing-hint">文件失踪</span>
             <span v-if="getRowDownloadHint(scope.row)" class="row-download-hint">{{ getRowDownloadHint(scope.row) }}</span>
           </div>
@@ -216,7 +245,53 @@
       v-model="manualEditVisible"
       :repo-id="props.repoId"
       :iso-record="activeIsoRecord"
+      :refresh-proposal="activeRefreshProposal"
+      @update:refresh-proposal="handleActiveRefreshProposalUpdate"
     />
+
+    <el-dialog
+      v-model="refreshProposalQueueVisible"
+      title="刷新提案队列"
+      width="780px"
+    >
+      <div class="refresh-proposal-queue-wrap">
+        <div class="refresh-proposal-queue-toolbar">
+          <div class="refresh-proposal-queue-summary">
+            共 {{ refreshProposalQueueItems.length }} 条待确认提案。点击“打开编辑器”后，仍需在编辑弹窗中再次确认提交。
+            <span v-if="rememberedProposalStatusCount > 0">当前已记住 {{ rememberedProposalStatusCount }} 条忽略/已处理记录。</span>
+          </div>
+          <div class="refresh-proposal-queue-toolbar-actions">
+            <el-button size="small" :disabled="refreshProposalQueueCount === 0" @click="clearRefreshProposalQueue">清空队列</el-button>
+            <el-button size="small" plain :disabled="rememberedProposalStatusCount === 0" @click="clearRememberedProposalStatuses">清空忽略/已处理记录</el-button>
+          </div>
+        </div>
+
+        <div v-if="refreshProposalQueueItems.length" class="refresh-proposal-queue-list">
+          <div v-for="item in refreshProposalQueueItems" :key="`proposal-${item.iso_id}`" class="refresh-proposal-queue-item">
+            <div class="refresh-proposal-queue-main">
+              <div class="refresh-proposal-queue-path">{{ item.path }}</div>
+              <div class="refresh-proposal-queue-meta">
+                <el-tag size="small" type="warning" effect="plain">{{ item.is_directory ? '目录' : (item.item_kind === 'archive' ? 'Archive' : '文件') }}</el-tag>
+                <el-tag
+                  v-for="field in proposalChangedFieldLabels(item.metadata_proposal)"
+                  :key="`${item.iso_id}-${field}`"
+                  size="small"
+                  type="danger"
+                  effect="plain"
+                >
+                  {{ field }}
+                </el-tag>
+              </div>
+            </div>
+            <div class="refresh-proposal-queue-actions">
+              <el-button size="small" type="warning" plain @click="openRefreshProposalItem(item)">打开编辑器</el-button>
+              <el-button size="small" plain @click="ignoreRefreshProposalItem(item)">忽略</el-button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="refresh-proposal-queue-empty">当前没有待确认的刷新提案。</div>
+      </div>
+    </el-dialog>
 
     <RepoDeleteDialog
       v-model="deleteDialogVisible"
@@ -275,6 +350,7 @@ import emitter from '../eventBus'
 import RepoManualEditDialog from './RepoManualEditDialog.vue'
 import RepoDeleteDialog from './RepoDeleteDialog.vue'
 import { findLatestTaskBySource, getTaskHint, isTaskBusy, startManagedDownload } from '../download/manager'
+import { resolveMetadataDisplayConfig, shouldExposeMetadataFieldByConfig } from '../utils/repoMetadataDisplay'
 
 const props = defineProps({
   repoId: {
@@ -289,13 +365,20 @@ const props = defineProps({
 
 const repoIsoList = ref([])
 const loading = ref(false)
+const refreshProposalQueueLoading = ref(false)
 const activeTypeFilter = ref('all')
 const activeOSDistroFilter = ref('')
 const activeMetadataKeyFilter = ref('')
 const activeMetadataValueFilter = ref('')
 const manualEditorMode = ref('legacy-type-editor')
+const metadataDisplayMode = ref('hidden')
+const metadataDisplayFields = ref('')
+const archiveSubdir = ref('archives')
 const manualEditVisible = ref(false)
 const activeIsoRecord = ref(null)
+const refreshProposalByIsoId = ref({})
+const refreshProposalQueueVisible = ref(false)
+const rememberedProposalStatuses = ref({})
 const deleteButtonEnabled = ref(false)
 const showMD5Column = ref(false)
 const showSizeColumn = ref(false)
@@ -324,20 +407,20 @@ const showEntertainmentFilter = computed(() => {
   return repoIsoList.value.some((item) => isEntertainmentItem(item))
 })
 
+const showDirectoryFilter = computed(() => {
+  return repoIsoList.value.some((item) => isDirectoryRow(item))
+})
+
+const showArchiveFilter = computed(() => {
+  return repoIsoList.value.some((item) => isArchiveItem(item))
+})
+
 const showOthersFilter = computed(() => {
   return repoIsoList.value.some((item) => isOtherItem(item))
 })
 
-const usesMetadataFilterOnly = computed(() => {
-  const mode = String(manualEditorMode.value || '').trim().toLowerCase()
-  return mode === 'metadata-editor' || mode === 'metadata'
-})
-
 const showLegacyTypeFilters = computed(() => {
-  if (usesMetadataFilterOnly.value) {
-    return false
-  }
-  return showOSFilter.value || showEntertainmentFilter.value || showOthersFilter.value
+  return showDirectoryFilter.value || showOSFilter.value || showEntertainmentFilter.value || showArchiveFilter.value || showOthersFilter.value
 })
 
 const osTotalCount = computed(() => {
@@ -363,6 +446,31 @@ const osDistroOptions = computed(() => {
 const osFilterButtonLabel = computed(() => {
   return activeOSDistroFilter.value || 'OS'
 })
+
+const typeFilterButtonLabel = computed(() => {
+  if (activeTypeFilter.value === 'directory') {
+    return '目录'
+  }
+  if (activeTypeFilter.value === 'os') {
+    return osFilterButtonLabel.value
+  }
+  if (activeTypeFilter.value === 'entertainment') {
+    return '娱乐'
+  }
+  if (activeTypeFilter.value === 'archive') {
+    return 'Archive'
+  }
+  if (activeTypeFilter.value === 'others') {
+    return 'Others'
+  }
+  return '全部'
+})
+
+const metadataDisplayConfig = computed(() => resolveMetadataDisplayConfig({
+  manual_editor_mode: manualEditorMode.value,
+  metadata_display_mode: metadataDisplayMode.value,
+  metadata_display_fields: metadataDisplayFields.value
+}))
 
 const metadataKeyOptions = computed(() => {
   const counter = new Map()
@@ -404,7 +512,7 @@ const metadataValueOptions = computed(() => {
 })
 
 const showMetadataFilter = computed(() => {
-  return metadataKeyOptions.value.length > 0
+  return metadataDisplayConfig.value.mode !== 'hidden' && metadataKeyOptions.value.length > 0
 })
 
 const singleMoveTargetOptions = computed(() => {
@@ -415,10 +523,29 @@ const canSubmitSingleMove = computed(() => {
   return !!singleMoveRecord.value?.id && !!singleMoveTargetRepoId.value && !singleMoveSubmitting.value
 })
 
+const refreshProposalQueueItems = computed(() => {
+  return Object.values(refreshProposalByIsoId.value)
+    .filter((item) => item && typeof item === 'object' && item.metadata_proposal)
+    .sort((left, right) => Number(right?.iso_id || 0) - Number(left?.iso_id || 0))
+})
+
+const refreshProposalQueueCount = computed(() => refreshProposalQueueItems.value.length)
+const rememberedProposalStatusCount = computed(() => Object.keys(rememberedProposalStatuses.value || {}).length)
+
+const activeRefreshProposal = computed(() => {
+  const isoId = Number(activeIsoRecord.value?.id || 0)
+  if (!isoId) {
+    return null
+  }
+  return refreshProposalByIsoId.value[String(isoId)]?.metadata_proposal || null
+})
+
 const filteredRepoIsoList = computed(() => {
   let items = repoIsoList.value
 
-  if (activeTypeFilter.value === 'os') {
+  if (activeTypeFilter.value === 'directory') {
+    items = items.filter((item) => isDirectoryRow(item))
+  } else if (activeTypeFilter.value === 'os') {
     items = items.filter((item) => {
       if (!isOSItem(item)) {
         return false
@@ -430,6 +557,8 @@ const filteredRepoIsoList = computed(() => {
     })
   } else if (activeTypeFilter.value === 'entertainment') {
     items = items.filter((item) => isEntertainmentItem(item))
+  } else if (activeTypeFilter.value === 'archive') {
+    items = items.filter((item) => isArchiveItem(item))
   } else if (activeTypeFilter.value === 'others') {
     items = items.filter((item) => isOtherItem(item))
   }
@@ -455,6 +584,11 @@ function normalizePath(path) {
   return String(path || '').replace(/\\/g, '/').trim()
 }
 
+function normalizeArchiveSubdirForDisplay(value) {
+  const normalized = normalizePath(value).replace(/^\/+|\/+$/g, '')
+  return normalized || 'archives'
+}
+
 function normalizeMetadataValue(value) {
   if (Array.isArray(value)) {
     return value.map((item) => String(item || '').trim()).filter(Boolean).join(' / ')
@@ -469,19 +603,15 @@ function normalizeMetadataValue(value) {
 }
 
 function shouldExposeMetadataField(key, normalizedValue) {
-  const normalizedKey = String(key || '').trim()
-  if (!normalizedKey || normalizedKey.startsWith('_')) {
-    return false
-  }
-  if (normalizedKey === 'path_parts' || normalizedKey === 'source_path' || normalizedKey === 'original_name') {
-    return false
-  }
-  return !!normalizedValue
+  return shouldExposeMetadataFieldByConfig(key, normalizedValue, metadataDisplayConfig.value)
 }
 
 function metadataFieldLabel(key) {
   const mapping = {
     title: '标题',
+    archive_format: '压缩格式',
+    archive_storage_path: 'Archive 路径',
+    lifecycle: '状态',
     series_name: '系列名字',
     scanlator_group: '汉化组',
     author_name: '作者',
@@ -521,8 +651,13 @@ function extractRowMetadata(item) {
 }
 
 function metadataPreviewEntries(item) {
+  if (metadataDisplayConfig.value.mode === 'hidden') {
+    return []
+  }
   const metadata = extractRowMetadata(item)
-  const preferredKeys = ['series_name', 'scanlator_group', 'author_name', 'author_alias', 'original_work']
+  const preferredKeys = metadataDisplayConfig.value.mode === 'selected'
+    ? metadataDisplayConfig.value.fields.filter((key) => key !== 'title')
+    : ['series_name', 'scanlator_group', 'author_name', 'author_alias', 'original_work']
   const entries = []
 
   for (const key of preferredKeys) {
@@ -539,8 +674,153 @@ function metadataPreviewEntries(item) {
   return entries
 }
 
+function refreshProposalMapKey(isoId) {
+  const value = Number(isoId || 0)
+  return value > 0 ? String(value) : ''
+}
+
+function proposalStorageKey(repoId) {
+  const value = Number(repoId || 0)
+  return value > 0 ? `lazymanga:refresh-proposal-status:${value}` : ''
+}
+
+function proposalSignature(item) {
+  const proposal = item?.metadata_proposal
+  if (!proposal || typeof proposal !== 'object') {
+    return ''
+  }
+  const changedFields = Array.isArray(proposal.changed_fields) ? proposal.changed_fields.map((field) => String(field || '').trim()).filter(Boolean).sort() : []
+  const changes = proposal.changes && typeof proposal.changes === 'object' ? proposal.changes : {}
+  const changeParts = changedFields.map((field) => {
+    const entry = changes[field] || {}
+    return `${field}:${JSON.stringify(entry.from ?? null)}=>${JSON.stringify(entry.to ?? null)}`
+  })
+  const analysisPath = String(proposal.analysis_path || '').trim()
+  return `${Number(item?.iso_id || 0)}|${analysisPath}|${changeParts.join('|')}`
+}
+
+function loadRememberedProposalStatuses() {
+  const key = proposalStorageKey(props.repoId)
+  if (!key || typeof window === 'undefined' || !window.localStorage) {
+    rememberedProposalStatuses.value = {}
+    return
+  }
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) {
+      rememberedProposalStatuses.value = {}
+      return
+    }
+    const parsed = JSON.parse(raw)
+    rememberedProposalStatuses.value = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch (_) {
+    rememberedProposalStatuses.value = {}
+  }
+}
+
+function persistRememberedProposalStatuses() {
+  const key = proposalStorageKey(props.repoId)
+  if (!key || typeof window === 'undefined' || !window.localStorage) {
+    return
+  }
+  try {
+    if (Object.keys(rememberedProposalStatuses.value || {}).length === 0) {
+      window.localStorage.removeItem(key)
+      return
+    }
+    window.localStorage.setItem(key, JSON.stringify(rememberedProposalStatuses.value))
+  } catch (_) {
+    // ignore local storage failures
+  }
+}
+
+function rememberProposalStatus(item, status) {
+  const signature = proposalSignature(item)
+  if (!signature) {
+    return
+  }
+  rememberedProposalStatuses.value = {
+    ...rememberedProposalStatuses.value,
+    [signature]: {
+      status: String(status || '').trim() || 'ignored',
+      updated_at: new Date().toISOString()
+    }
+  }
+  persistRememberedProposalStatuses()
+}
+
+function clearRememberedProposalStatuses() {
+  rememberedProposalStatuses.value = {}
+  persistRememberedProposalStatuses()
+}
+
+function isProposalRemembered(item) {
+  const signature = proposalSignature(item)
+  return !!(signature && rememberedProposalStatuses.value[signature])
+}
+
+function hasRefreshProposal(item) {
+  const key = refreshProposalMapKey(item?.id)
+  return !!(key && refreshProposalByIsoId.value[key]?.metadata_proposal)
+}
+
+function proposalChangedFieldLabels(proposal) {
+  const fields = Array.isArray(proposal?.changed_fields) ? proposal.changed_fields : []
+  return fields.map((field) => metadataFieldLabel(String(field || '').trim())).filter(Boolean)
+}
+
+function setRefreshProposalItem(item) {
+  const key = refreshProposalMapKey(item?.iso_id)
+  if (!key || !item?.metadata_proposal) {
+    return
+  }
+  refreshProposalByIsoId.value = {
+    ...refreshProposalByIsoId.value,
+    [key]: {
+      ...item,
+      iso_id: Number(item.iso_id)
+    }
+  }
+}
+
+function removeRefreshProposalItem(isoId) {
+  const key = refreshProposalMapKey(isoId)
+  if (!key || !refreshProposalByIsoId.value[key]) {
+    return
+  }
+  const next = { ...refreshProposalByIsoId.value }
+  delete next[key]
+  refreshProposalByIsoId.value = next
+}
+
+function clearRefreshProposalQueue() {
+  refreshProposalByIsoId.value = {}
+}
+
+function syncRefreshProposalQueueWithRows(rows) {
+  const validIds = new Set((Array.isArray(rows) ? rows : []).map((row) => refreshProposalMapKey(row?.id)).filter(Boolean))
+  const next = {}
+  for (const [key, item] of Object.entries(refreshProposalByIsoId.value)) {
+    if (!validIds.has(key)) {
+      continue
+    }
+    next[key] = item
+  }
+  refreshProposalByIsoId.value = next
+}
+
 function isDirectoryRow(item) {
   return !!(item?.is_directory ?? item?.isDirectory)
+}
+
+function isArchiveItem(item) {
+  const direct = String(item?.item_kind || item?.itemKind || '').trim().toLowerCase()
+  if (direct === 'archive') {
+    return true
+  }
+  const metadata = extractRowMetadata(item)
+  const metadataKind = String(metadata?.item_kind || '').trim().toLowerCase()
+  return metadataKind === 'archive'
 }
 
 function isOSItem(item) {
@@ -552,7 +832,7 @@ function isEntertainmentItem(item) {
 }
 
 function isOtherItem(item) {
-  return !isOSItem(item) && !isEntertainmentItem(item)
+  return !isDirectoryRow(item) && !isArchiveItem(item) && !isOSItem(item) && !isEntertainmentItem(item)
 }
 
 function isRowMissing(item) {
@@ -600,6 +880,41 @@ function extractFileName(path) {
   return parts[parts.length - 1] || normalized
 }
 
+function formatDisplayPath(item) {
+  const path = normalizePath(item?.path)
+  if (!isArchiveItem(item)) {
+    return path
+  }
+  const prefix = normalizeArchiveSubdirForDisplay(archiveSubdir.value)
+  if (!prefix) {
+    return path
+  }
+  if (path === prefix) {
+    return ''
+  }
+  if (path.startsWith(prefix + '/')) {
+    return path.slice(prefix.length + 1)
+  }
+  return path
+}
+
+function resolvePrimaryDisplayLabel(item) {
+  const metadata = extractRowMetadata(item)
+  const metadataTitle = normalizeMetadataValue(metadata?.title)
+  if (metadataTitle) {
+    return metadataTitle
+  }
+  const fileName = String(item?.filename || item?.fileName || '').trim()
+  if (fileName) {
+    return fileName
+  }
+  const displayPath = formatDisplayPath(item)
+  if (displayPath) {
+    return extractFileName(displayPath)
+  }
+  return '-'
+}
+
 function extractElementSuffix(item) {
   if (isDirectoryRow(item)) return ''
   const name = String(item?.filename || item?.fileName || extractFileName(item?.path || '') || '').trim()
@@ -609,6 +924,10 @@ function extractElementSuffix(item) {
 
 function formatElementType(item) {
   if (isDirectoryRow(item)) return '目录'
+  if (isArchiveItem(item)) {
+    const suffix = extractElementSuffix(item)
+    return suffix ? `Archive ${suffix}` : 'Archive'
+  }
   const suffix = extractElementSuffix(item)
   if (suffix) return `${suffix} 文件`
   return '文件'
@@ -616,6 +935,7 @@ function formatElementType(item) {
 
 function elementTagType(item) {
   if (isDirectoryRow(item)) return 'success'
+  if (isArchiveItem(item)) return 'warning'
   const suffix = extractElementSuffix(item)
   if (suffix === '.iso') return 'warning'
   if (suffix) return 'primary'
@@ -624,6 +944,23 @@ function elementTagType(item) {
 
 function setTypeFilter(type) {
   activeTypeFilter.value = type
+}
+
+function handleTypeFilterCommand(command) {
+  const type = String(command || '').trim()
+  if (!type || type === 'all') {
+    activeOSDistroFilter.value = ''
+    setTypeFilter('all')
+    return
+  }
+
+  if (type === 'os') {
+    activateOSFilter()
+    return
+  }
+
+  activeOSDistroFilter.value = ''
+  setTypeFilter(type)
 }
 
 function handleMetadataKeyChange(value) {
@@ -655,6 +992,49 @@ function handleOSDistroCommand(command) {
 function openManualEdit(row) {
   activeIsoRecord.value = row ? { ...row } : null
   manualEditVisible.value = true
+}
+
+function openRefreshProposalItem(item) {
+  const row = repoIsoList.value.find((candidate) => Number(candidate?.id) === Number(item?.iso_id))
+  if (!row) {
+    ElMessage.error('当前提案对应的记录已不存在，请先刷新列表')
+    removeRefreshProposalItem(item?.iso_id)
+    return
+  }
+  setRefreshProposalItem(item)
+  activeIsoRecord.value = { ...row }
+  manualEditVisible.value = true
+  refreshProposalQueueVisible.value = false
+}
+
+function ignoreRefreshProposalItem(item) {
+  rememberProposalStatus(item, 'ignored')
+  removeRefreshProposalItem(item?.iso_id)
+}
+
+function handleActiveRefreshProposalUpdate(proposal) {
+  const isoId = Number(activeIsoRecord.value?.id || 0)
+  if (!isoId) {
+    return
+  }
+  if (proposal && typeof proposal === 'object') {
+    const existing = refreshProposalByIsoId.value[String(isoId)] || {}
+    setRefreshProposalItem({
+      ...existing,
+      iso_id: isoId,
+      path: activeIsoRecord.value?.path || existing.path || '',
+      file_name: activeIsoRecord.value?.filename || activeIsoRecord.value?.fileName || existing.file_name || '',
+      is_directory: !!(activeIsoRecord.value?.is_directory ?? activeIsoRecord.value?.isDirectory ?? existing.is_directory),
+      item_kind: String(activeIsoRecord.value?.item_kind || activeIsoRecord.value?.itemKind || existing.item_kind || '').trim(),
+      metadata_proposal: proposal
+    })
+    return
+  }
+  const existing = refreshProposalByIsoId.value[String(isoId)]
+  if (existing) {
+    rememberProposalStatus(existing, 'processed')
+  }
+  removeRefreshProposalItem(isoId)
 }
 
 function openDeleteDialog(row) {
@@ -773,6 +1153,14 @@ function ensureActiveTypeFilterValid() {
   }
 
   if (activeTypeFilter.value === 'entertainment' && !showEntertainmentFilter.value) {
+    activeTypeFilter.value = 'all'
+    return
+  }
+  if (activeTypeFilter.value === 'directory' && !showDirectoryFilter.value) {
+    activeTypeFilter.value = 'all'
+    return
+  }
+  if (activeTypeFilter.value === 'archive' && !showArchiveFilter.value) {
     activeTypeFilter.value = 'all'
     return
   }
@@ -950,6 +1338,48 @@ async function handleDownload(row) {
   }
 }
 
+async function fetchRefreshProposalQueue() {
+  if (!props.repoId) {
+    clearRefreshProposalQueue()
+    return
+  }
+
+  refreshProposalQueueLoading.value = true
+  try {
+    const res = await fetch(`/api/repos/${props.repoId}/repoisos/refresh-proposals`, {
+      method: 'POST'
+    })
+    if (!res.ok) {
+      throw new Error(await parseErrorMessage(res, '批量生成刷新提案失败'))
+    }
+
+    const data = await res.json()
+    const items = Array.isArray(data?.items) ? data.items : []
+    const next = {}
+    for (const item of items) {
+      const key = refreshProposalMapKey(item?.iso_id)
+      if (!key || !item?.metadata_proposal) {
+        continue
+      }
+      if (isProposalRemembered(item)) {
+        continue
+      }
+      next[key] = item
+    }
+    refreshProposalByIsoId.value = next
+    if (items.length > 0) {
+      refreshProposalQueueVisible.value = true
+      ElMessage.success(`已生成 ${items.length} 条待确认提案`)
+    } else {
+      ElMessage.info('当前没有识别到需要确认的 metadata 提案')
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '批量生成刷新提案失败')
+  } finally {
+    refreshProposalQueueLoading.value = false
+  }
+}
+
 async function fetchRepoIsos() {
   if (!props.repoId) {
     repoIsoList.value = []
@@ -969,6 +1399,7 @@ async function fetchRepoIsos() {
       return
     }
     repoIsoList.value = Array.isArray(data) ? data : []
+    syncRefreshProposalQueueWithRows(repoIsoList.value)
     ensureActiveTypeFilterValid()
   } catch (e) {
     console.error('[RepoIsoTable] fetchRepoIsos failed', e)
@@ -976,6 +1407,7 @@ async function fetchRepoIsos() {
       return
     }
     repoIsoList.value = []
+    clearRefreshProposalQueue()
     activeTypeFilter.value = 'all'
     activeOSDistroFilter.value = ''
     activeMetadataKeyFilter.value = ''
@@ -995,25 +1427,32 @@ async function fetchRepoInfo() {
     showSizeColumn.value = false
     singleMoveEnabled.value = false
     manualEditorMode.value = 'legacy-type-editor'
+    metadataDisplayMode.value = 'hidden'
+    metadataDisplayFields.value = ''
+    archiveSubdir.value = 'archives'
     return
   }
 
   const requestSeq = ++fetchRepoInfoRequestSeq.value
   try {
-    const res = await fetch(`/api/repos/${props.repoId}/repo-info`)
+    const res = await fetch(`/api/repos/${props.repoId}/type-settings`)
     if (!res.ok) {
-      throw new Error(await parseErrorMessage(res, '获取 repo info 失败'))
+      throw new Error(await parseErrorMessage(res, '获取仓库类型设置失败'))
     }
 
     const data = await res.json()
     if (requestSeq !== fetchRepoInfoRequestSeq.value) {
       return
     }
-    deleteButtonEnabled.value = !!data?.delete_button
-    showMD5Column.value = !!data?.show_md5
-    showSizeColumn.value = !!data?.show_size
-    singleMoveEnabled.value = !!data?.single_move
-    manualEditorMode.value = String(data?.manual_editor_mode || data?.manualEditorMode || 'legacy-type-editor')
+    const effective = data?.effective || {}
+    deleteButtonEnabled.value = !!effective?.delete_button
+    showMD5Column.value = !!effective?.show_md5
+    showSizeColumn.value = !!effective?.show_size
+    singleMoveEnabled.value = !!effective?.single_move
+    manualEditorMode.value = String(effective?.manual_editor_mode || effective?.manualEditorMode || 'legacy-type-editor')
+    metadataDisplayMode.value = String(effective?.metadata_display_mode || 'hidden')
+    metadataDisplayFields.value = String(effective?.metadata_display_fields || '')
+    archiveSubdir.value = normalizeArchiveSubdirForDisplay(effective?.archive_subdir || 'archives')
     ensureActiveTypeFilterValid()
   } catch (e) {
     console.error('[RepoIsoTable] fetchRepoInfo failed', e)
@@ -1025,21 +1464,49 @@ async function fetchRepoInfo() {
     showSizeColumn.value = false
     singleMoveEnabled.value = false
     manualEditorMode.value = 'legacy-type-editor'
+    metadataDisplayMode.value = 'hidden'
+    metadataDisplayFields.value = ''
+    archiveSubdir.value = 'archives'
   }
 }
 
 onMounted(() => {
   emitter.on('refresh-all', handleRefreshAll)
   emitter.on('refresh-repo', handleRefreshRepo)
+  emitter.on('repo-refresh-proposals', handleRefreshProposalRequest)
+  emitter.on('repo-open-refresh-proposals', handleOpenRefreshProposalQueue)
   emitter.on('repo-created-activated', handleRepoCreatedActivated)
+  loadRememberedProposalStatuses()
 })
 
 onUnmounted(() => {
   clearDelayedRefreshTimer()
   emitter.off('refresh-all', handleRefreshAll)
   emitter.off('refresh-repo', handleRefreshRepo)
+  emitter.off('repo-refresh-proposals', handleRefreshProposalRequest)
+  emitter.off('repo-open-refresh-proposals', handleOpenRefreshProposalQueue)
   emitter.off('repo-created-activated', handleRepoCreatedActivated)
 })
+
+function handleRefreshProposalRequest(payload) {
+  const repoId = Number(payload?.repoId)
+  if (!repoId || repoId !== props.repoId) {
+    return
+  }
+  fetchRefreshProposalQueue()
+}
+
+function handleOpenRefreshProposalQueue(payload) {
+  const repoId = Number(payload?.repoId)
+  if (!repoId || repoId !== props.repoId) {
+    return
+  }
+  if (refreshProposalQueueCount.value > 0) {
+    refreshProposalQueueVisible.value = true
+    return
+  }
+  ElMessage.info('当前没有待确认的提案队列')
+}
 
 watch(
   () => props.repoId,
@@ -1051,6 +1518,9 @@ watch(
     singleMoveTargetRepoId.value = ''
     singleMoveTargetRepos.value = []
     repoIsoList.value = []
+    refreshProposalQueueVisible.value = false
+    clearRefreshProposalQueue()
+    loadRememberedProposalStatuses()
     activeTypeFilter.value = 'all'
     activeOSDistroFilter.value = ''
     activeMetadataKeyFilter.value = ''
@@ -1060,6 +1530,8 @@ watch(
     showSizeColumn.value = false
     singleMoveEnabled.value = false
     manualEditorMode.value = 'legacy-type-editor'
+    metadataDisplayMode.value = 'hidden'
+    metadataDisplayFields.value = ''
 
     if (Number(deferredRepoId.value) === Number(props.repoId)) {
       scheduleInitialRefresh(500)
@@ -1085,6 +1557,39 @@ watch(
 </script>
 
 <style scoped>
+.repoiso-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.repoiso-toolbar-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.repoiso-toolbar-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #7c2d12;
+}
+
+.repoiso-toolbar-hint {
+  font-size: 12px;
+  color: #92400e;
+}
+
+.repoiso-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .el-table {
   --el-table-border-color: #94a3b8;
   --el-table-border: 2px solid #94a3b8;
@@ -1107,11 +1612,49 @@ watch(
   border-bottom: none !important;
 }
 
+:deep(.size-column-header .cell),
+:deep(.size-column .cell) {
+  padding-left: 6px !important;
+  padding-right: 10px !important;
+}
+
+:deep(.action-column-header .cell),
+:deep(.action-column .cell) {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+
 .type-filter-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.type-column-header {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.type-column-title {
+  font-weight: 700;
+  color: #334155;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.type-filter-trigger {
+  min-width: 44px;
+  padding-left: 6px;
+  padding-right: 6px;
+  font-size: 12px;
+}
+
+.type-filter-trigger :deep(.el-icon) {
+  margin-left: 4px;
 }
 
 .metadata-filter-actions {
@@ -1132,8 +1675,14 @@ watch(
 .row-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
   flex-wrap: wrap;
+}
+
+.download-action-button {
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .row-download-hint {
@@ -1145,6 +1694,13 @@ watch(
 
 .row-missing-hint {
   color: #b91c1c;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.row-proposal-hint {
+  color: #c2410c;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.3;
@@ -1163,13 +1719,114 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.metadata-preview-tag {
+  max-width: min(100%, 240px);
+  min-width: 0;
+}
+
+.metadata-proposal-tag {
+  border-color: #fca5a5;
+}
+
+.metadata-preview-tag :deep(.el-tag__content) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .single-move-content {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.refresh-proposal-queue-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.refresh-proposal-queue-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.refresh-proposal-queue-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.refresh-proposal-queue-summary {
+  font-size: 13px;
+  color: #78350f;
+  line-height: 1.6;
+}
+
+.refresh-proposal-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.refresh-proposal-queue-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+}
+
+.refresh-proposal-queue-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.refresh-proposal-queue-path {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #431407;
+  word-break: break-all;
+}
+
+.refresh-proposal-queue-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.refresh-proposal-queue-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.refresh-proposal-queue-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: #92400e;
+  border: 1px dashed #fdba74;
+  border-radius: 10px;
+  background: #fff7ed;
 }
 
 .single-move-row {
@@ -1250,9 +1907,17 @@ watch(
 
 .others-path-cell {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   width: 100%;
+  min-width: 0;
+}
+
+.path-preview-stack {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1270,10 +1935,27 @@ watch(
   flex-shrink: 0;
 }
 
-.others-full-path {
+.archive-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9a3412;
+  background-color: #ffedd5;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.others-primary-name {
+  display: block;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: 600;
 }
 
 .entertainment-path-cell {

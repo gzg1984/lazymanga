@@ -1,7 +1,7 @@
 <template>
   <div>
     <el-button type="warning" size="small" @click="openDialog">
-      仓库名字：{{ currentRepoName || '（未命名）' }}
+      仓库：{{ currentRepoName || '（未命名）' }}
     </el-button>
 
     <el-dialog v-model="dialogVisible" title="仓库设置" width="760px">
@@ -31,87 +31,210 @@
           </div>
         </div>
 
-        <div class="section-title mt-4">本仓库 Overlay</div>
-        <div class="help-text">不勾选“自定义”时，该项会继承所绑定模板的默认值。</div>
+        <div class="collapsible-section-stack">
+          <CollapsibleSection v-model:collapsed="bulkActionsCollapsed" title="批量操作">
+            <div class="settings-action-list">
+              <div class="settings-action-card">
+                <div class="settings-action-copy">
+                  <div class="settings-action-title">刷新仓库扫描</div>
+                  <p class="settings-action-desc">重新扫描当前仓库根路径，补充新增文件并更新失踪标记。</p>
+                </div>
+                <el-button
+                  v-if="!isBasicRepo"
+                  type="info"
+                  plain
+                  :loading="normalizingIncremental"
+                  :disabled="isBusy"
+                  @click="refreshRepo"
+                >
+                  刷新
+                </el-button>
+                <div v-else class="settings-action-disabled-hint">基础漫画仓库不支持自动扫描</div>
+              </div>
 
-        <div class="overlay-box">
-          <div class="overlay-row">
-            <el-checkbox v-model="typeForm.customizeAddButton" :disabled="isBusy">自定义“允许添加文件”</el-checkbox>
-            <el-switch v-model="typeForm.addButton" :disabled="isBusy || !typeForm.customizeAddButton" inline-prompt active-text="开" inactive-text="关" />
-          </div>
-          <div class="overlay-row">
-            <el-checkbox v-model="typeForm.customizeAddDirectoryButton" :disabled="isBusy">自定义“允许添加目录”</el-checkbox>
-            <el-switch v-model="typeForm.addDirectoryButton" :disabled="isBusy || !typeForm.customizeAddDirectoryButton" inline-prompt active-text="开" inactive-text="关" />
-          </div>
-          <div class="overlay-row">
-            <el-checkbox v-model="typeForm.customizeDeleteButton" :disabled="isBusy">自定义“允许删除”</el-checkbox>
-            <el-switch v-model="typeForm.deleteButton" :disabled="isBusy || !typeForm.customizeDeleteButton" inline-prompt active-text="开" inactive-text="关" />
-          </div>
-          <div class="overlay-row">
-            <el-checkbox v-model="typeForm.customizeAutoNormalize" :disabled="isBusy">自定义“自动归类”</el-checkbox>
-            <el-switch v-model="typeForm.autoNormalize" :disabled="isBusy || !typeForm.customizeAutoNormalize" inline-prompt active-text="开" inactive-text="关" />
-          </div>
-          <div class="overlay-row">
-            <el-checkbox v-model="typeForm.customizeShowMD5" :disabled="isBusy">自定义“显示 MD5”</el-checkbox>
-            <el-switch v-model="typeForm.showMD5" :disabled="isBusy || !typeForm.customizeShowMD5" inline-prompt active-text="开" inactive-text="关" />
-          </div>
-          <div class="overlay-row">
-            <el-checkbox v-model="typeForm.customizeShowSize" :disabled="isBusy">自定义“显示大小”</el-checkbox>
-            <el-switch v-model="typeForm.showSize" :disabled="isBusy || !typeForm.customizeShowSize" inline-prompt active-text="开" inactive-text="关" />
-          </div>
-          <div class="overlay-row">
-            <el-checkbox v-model="typeForm.customizeSingleMove" :disabled="isBusy">自定义“单条移动”</el-checkbox>
-            <el-switch v-model="typeForm.singleMove" :disabled="isBusy || !typeForm.customizeSingleMove" inline-prompt active-text="开" inactive-text="关" />
-          </div>
-          <div class="overlay-row">
-            <el-checkbox v-model="typeForm.customizeManualEditorMode" :disabled="isBusy">自定义“手动编辑器”</el-checkbox>
-            <el-select v-model="typeForm.manualEditorMode" class="manual-editor-mode-select" :disabled="isBusy || !typeForm.customizeManualEditorMode">
-              <el-option label="元数据编辑" value="metadata-editor" />
-              <el-option label="旧版类型编辑" value="legacy-type-editor" />
-            </el-select>
-          </div>
-          <div class="overlay-row rulebook-overlay-row">
-            <el-checkbox v-model="typeForm.customizeRulebook" :disabled="isBusy">自定义 RuleBook</el-checkbox>
-            <RuleBookSelector
-              v-model:name="typeForm.rulebookName"
-              v-model:version="typeForm.rulebookVersion"
-              :disabled="isBusy || !typeForm.customizeRulebook"
-            />
-          </div>
-        </div>
+              <div class="settings-action-card settings-action-card-danger">
+                <div class="settings-action-copy">
+                  <div class="settings-action-title">删除所有失效项</div>
+                  <p class="settings-action-desc">批量删除当前仓库中已标记为“文件失踪”的记录，不会删除任何实际文件。</p>
+                </div>
+                <el-button
+                  type="danger"
+                  plain
+                  :loading="deletingMissingEntries"
+                  :disabled="isBusy"
+                  @click="deleteMissingRepoEntries"
+                >
+                  删除所有失效项
+                </el-button>
+              </div>
 
-        <div class="preview-box">
-          <div class="preview-title">当前生效预览</div>
-          <div class="preview-grid">
-            <span>模板</span>
-            <span>{{ selectedRepoTypeOption?.name || typeForm.repoTypeKey || '-' }}</span>
-            <span>允许添加文件</span>
-            <span>{{ previewSettings.addButton ? '是' : '否' }}</span>
-            <span>允许添加目录</span>
-            <span>{{ previewSettings.addDirectoryButton ? '是' : '否' }}</span>
-            <span>允许删除</span>
-            <span>{{ previewSettings.deleteButton ? '是' : '否' }}</span>
-            <span>自动归类</span>
-            <span>{{ previewSettings.autoNormalize ? '是' : '否' }}</span>
-            <span>显示 MD5</span>
-            <span>{{ previewSettings.showMD5 ? '是' : '否' }}</span>
-            <span>显示大小</span>
-            <span>{{ previewSettings.showSize ? '是' : '否' }}</span>
-            <span>单条移动</span>
-            <span>{{ previewSettings.singleMove ? '是' : '否' }}</span>
-            <span>手动编辑器</span>
-            <span>{{ previewSettings.manualEditorMode === 'metadata-editor' ? '元数据编辑' : '旧版类型编辑' }}</span>
-            <span>RuleBook</span>
-            <span>{{ previewSettings.ruleBookName || '-' }} @ {{ previewSettings.ruleBookVersion || '-' }}</span>
-          </div>
+              <div class="settings-action-card settings-action-card-warn">
+                <div class="settings-action-copy">
+                  <div class="settings-action-title">批量生成提案队列</div>
+                  <p class="settings-action-desc">批量检查当前仓库记录的 refresh metadata 提案，只生成候选，不会自动落库。</p>
+                </div>
+                <el-button
+                  type="warning"
+                  plain
+                  :loading="generatingProposalQueue"
+                  :disabled="isBusy"
+                  @click="generateRefreshProposalQueue"
+                >
+                  生成提案队列
+                </el-button>
+              </div>
+
+              <div class="settings-action-card settings-action-card-warn">
+                <div class="settings-action-copy">
+                  <div class="settings-action-title">查看提案队列</div>
+                  <p class="settings-action-desc">打开当前仓库已缓存的待确认提案队列；如果没有提案，不会显示额外内容。</p>
+                </div>
+                <el-button
+                  type="warning"
+                  plain
+                  :disabled="isBusy"
+                  @click="openRefreshProposalQueue"
+                >
+                  查看提案队列
+                </el-button>
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection v-model:collapsed="overlayCollapsed" title="本仓库 Overlay">
+            <div class="help-text">不勾选“自定义”时，该项会继承所绑定模板的默认值。</div>
+
+            <div class="overlay-box">
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeAddButton" :disabled="isBusy">自定义“允许添加文件”</el-checkbox>
+                <el-switch v-model="typeForm.addButton" :disabled="isBusy || !typeForm.customizeAddButton" inline-prompt active-text="开" inactive-text="关" />
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeAddDirectoryButton" :disabled="isBusy">自定义“允许添加目录”</el-checkbox>
+                <el-switch v-model="typeForm.addDirectoryButton" :disabled="isBusy || !typeForm.customizeAddDirectoryButton" inline-prompt active-text="开" inactive-text="关" />
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeDeleteButton" :disabled="isBusy">自定义“允许删除”</el-checkbox>
+                <el-switch v-model="typeForm.deleteButton" :disabled="isBusy || !typeForm.customizeDeleteButton" inline-prompt active-text="开" inactive-text="关" />
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeAutoNormalize" :disabled="isBusy">自定义“自动归类”</el-checkbox>
+                <el-switch v-model="typeForm.autoNormalize" :disabled="isBusy || !typeForm.customizeAutoNormalize" inline-prompt active-text="开" inactive-text="关" />
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeShowMD5" :disabled="isBusy">自定义“显示 MD5”</el-checkbox>
+                <el-switch v-model="typeForm.showMD5" :disabled="isBusy || !typeForm.customizeShowMD5" inline-prompt active-text="开" inactive-text="关" />
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeShowSize" :disabled="isBusy">自定义“显示大小”</el-checkbox>
+                <el-switch v-model="typeForm.showSize" :disabled="isBusy || !typeForm.customizeShowSize" inline-prompt active-text="开" inactive-text="关" />
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeSingleMove" :disabled="isBusy">自定义“单条移动”</el-checkbox>
+                <el-switch v-model="typeForm.singleMove" :disabled="isBusy || !typeForm.customizeSingleMove" inline-prompt active-text="开" inactive-text="关" />
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeManualEditorMode" :disabled="isBusy">自定义“手动编辑器”</el-checkbox>
+                <el-select v-model="typeForm.manualEditorMode" class="manual-editor-mode-select" :disabled="isBusy || !typeForm.customizeManualEditorMode">
+                  <el-option label="元数据编辑" value="metadata-editor" />
+                  <el-option label="旧版类型编辑" value="legacy-type-editor" />
+                </el-select>
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeMetadataDisplayMode" :disabled="isBusy">自定义“metadata 展示”</el-checkbox>
+                <el-select v-model="typeForm.metadataDisplayMode" class="manual-editor-mode-select" :disabled="isBusy || !typeForm.customizeMetadataDisplayMode">
+                  <el-option label="不显示" value="hidden" />
+                  <el-option label="自动显示识别字段" value="auto" />
+                  <el-option label="只显示指定字段" value="selected" />
+                </el-select>
+              </div>
+              <div class="overlay-row overlay-row-textarea">
+                <el-checkbox v-model="typeForm.customizeMetadataDisplayFields" :disabled="isBusy">自定义“metadata 字段”</el-checkbox>
+                <div class="overlay-textarea-wrap">
+                  <el-input
+                    v-model="typeForm.metadataDisplayFields"
+                    type="textarea"
+                    :rows="3"
+                    :disabled="isBusy || !typeForm.customizeMetadataDisplayFields || previewSettings.metadataDisplayMode !== 'selected'"
+                    placeholder="用逗号或换行分隔，例如 title, series_name, author_name"
+                  />
+                  <div class="help-text">只在“只显示指定字段”时生效；这些字段会控制信息弹窗展示和 metadata 编辑项。</div>
+                </div>
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeArchiveSubdir" :disabled="isBusy">自定义“archive 子目录”</el-checkbox>
+                <el-input
+                  v-model="typeForm.archiveSubdir"
+                  class="manual-editor-mode-select"
+                  :disabled="isBusy || !typeForm.customizeArchiveSubdir"
+                  placeholder="例如 archives"
+                />
+              </div>
+              <div class="overlay-row">
+                <el-checkbox v-model="typeForm.customizeMaterializedSubdir" :disabled="isBusy">自定义“materialized 子目录”</el-checkbox>
+                <div class="overlay-inline-stack">
+                  <el-input
+                    v-model="typeForm.materializedSubdir"
+                    class="manual-editor-mode-select"
+                    :disabled="isBusy || !typeForm.customizeMaterializedSubdir"
+                    placeholder="/ 或例如 library"
+                  />
+                  <div class="help-text">填 `/` 表示仓库根目录本身；此模式下普通扫描会自动跳过 archive 子目录。</div>
+                </div>
+              </div>
+              <div class="overlay-row rulebook-overlay-row">
+                <el-checkbox v-model="typeForm.customizeRulebook" :disabled="isBusy">自定义 RuleBook</el-checkbox>
+                <RuleBookSelector
+                  v-model:name="typeForm.rulebookName"
+                  v-model:version="typeForm.rulebookVersion"
+                  :disabled="isBusy || !typeForm.customizeRulebook"
+                />
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection v-model:collapsed="previewCollapsed" title="当前生效预览">
+            <div class="preview-box">
+              <div class="preview-grid">
+                <span>模板</span>
+                <span>{{ selectedRepoTypeOption?.name || typeForm.repoTypeKey || '-' }}</span>
+                <span>允许添加文件</span>
+                <span>{{ previewSettings.addButton ? '是' : '否' }}</span>
+                <span>允许添加目录</span>
+                <span>{{ previewSettings.addDirectoryButton ? '是' : '否' }}</span>
+                <span>允许删除</span>
+                <span>{{ previewSettings.deleteButton ? '是' : '否' }}</span>
+                <span>自动归类</span>
+                <span>{{ previewSettings.autoNormalize ? '是' : '否' }}</span>
+                <span>显示 MD5</span>
+                <span>{{ previewSettings.showMD5 ? '是' : '否' }}</span>
+                <span>显示大小</span>
+                <span>{{ previewSettings.showSize ? '是' : '否' }}</span>
+                <span>单条移动</span>
+                <span>{{ previewSettings.singleMove ? '是' : '否' }}</span>
+                <span>手动编辑器</span>
+                <span>{{ previewSettings.manualEditorMode === 'metadata-editor' ? '元数据编辑' : '旧版类型编辑' }}</span>
+                <span>metadata 展示</span>
+                <span>{{ metadataDisplayModeLabel(previewSettings.metadataDisplayMode) }}</span>
+                <span>metadata 字段</span>
+                <span>{{ previewSettings.metadataDisplayMode === 'selected' ? (previewSettings.metadataDisplayFields || '（未指定，使用默认字段）') : '（当前模式不限制字段清单）' }}</span>
+                <span>archive 子目录</span>
+                <span>{{ previewSettings.archiveSubdir || 'archives' }}</span>
+                <span>materialized 子目录</span>
+                <span>{{ previewSettings.materializedSubdir || '/' }}</span>
+                <span>RuleBook</span>
+                <span>{{ previewSettings.ruleBookName || '-' }} @ {{ previewSettings.ruleBookVersion || '-' }}</span>
+              </div>
+              <div v-if="previewSettings.materializedSubdir === '/'" class="help-text preview-help-text">
+                当前仓库使用“根目录兼容模式”：普通扫描以仓库根目录为主，但会显式排除 archive 子目录。
+              </div>
+            </div>
+          </CollapsibleSection>
         </div>
       </div>
 
       <template #footer>
         <div class="repo-settings-footer">
-          <el-button type="danger" :loading="deleting" :disabled="saving || isBasicRepo" @click="deleteRepo">
-            {{ deleteButtonText }}
-          </el-button>
           <div class="footer-right-actions">
             <el-button :disabled="isBusy" @click="restoreTemplateInheritance">恢复全部继承</el-button>
             <el-button :disabled="isBusy" @click="closeDialog">关闭</el-button>
@@ -129,7 +252,10 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import emitter from '../eventBus'
+import CollapsibleSection from './CollapsibleSection.vue'
 import RuleBookSelector from './RuleBookSelector.vue'
+import { DEFAULT_VISIBLE_REPO_TYPE_KEY, isRepoTypeHidden } from '../utils/repoTypeVisibility'
+import { metadataDisplayModeLabel, stringifyMetadataDisplayFields } from '../utils/repoMetadataDisplay'
 
 const props = defineProps({
   repoId: {
@@ -138,30 +264,38 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['deleted'])
-
 const dialogVisible = ref(false)
 const currentRepoName = ref('加载中...')
 const inputRepoName = ref('')
 const isBasicRepo = ref(false)
 const loadingRepoInfo = ref(false)
 const saving = ref(false)
-const deleting = ref(false)
+const normalizingIncremental = ref(false)
+const deletingMissingEntries = ref(false)
+const generatingProposalQueue = ref(false)
 const repoTypeOptions = ref([])
 const originalName = ref('')
 const originalSettingsSignature = ref('')
 const currentEffectiveSettings = ref(defaultEffectiveSettings())
+const bulkActionsCollapsed = ref(true)
+const overlayCollapsed = ref(true)
+const previewCollapsed = ref(true)
 
 const typeForm = reactive(createTypeForm())
 
-const isBusy = computed(() => saving.value || deleting.value || loadingRepoInfo.value)
-const deleteButtonText = computed(() => (isBasicRepo.value ? '不能删除基础漫画仓库' : '删除仓库，不会删除任何实际内容'))
+const isBusy = computed(() => saving.value || loadingRepoInfo.value || normalizingIncremental.value || deletingMissingEntries.value || generatingProposalQueue.value)
 const selectedRepoTypeOption = computed(() => {
   return repoTypeOptions.value.find((item) => item.key === typeForm.repoTypeKey) || null
 })
 const selectableRepoTypeOptions = computed(() => {
   const selectedKey = String(typeForm.repoTypeKey || '').trim()
-  return repoTypeOptions.value.filter((item) => item.enabled !== false || item.key === selectedKey)
+  return repoTypeOptions.value.filter((item) => {
+    const key = String(item?.key || '').trim()
+    if (isRepoTypeHidden(key) && key !== selectedKey) {
+      return false
+    }
+    return item.enabled !== false || key === selectedKey
+  })
 })
 const selectedRepoTypeDescription = computed(() => {
   return String(selectedRepoTypeOption.value?.description || '').trim()
@@ -177,6 +311,10 @@ const previewSettings = computed(() => {
         showSize: !!selectedRepoTypeOption.value.show_size,
         singleMove: !!selectedRepoTypeOption.value.single_move,
         manualEditorMode: selectedRepoTypeOption.value.manual_editor_mode || 'legacy-type-editor',
+        metadataDisplayMode: selectedRepoTypeOption.value.metadata_display_mode || 'hidden',
+        metadataDisplayFields: selectedRepoTypeOption.value.metadata_display_fields || '',
+        archiveSubdir: selectedRepoTypeOption.value.archive_subdir || 'archives',
+        materializedSubdir: selectedRepoTypeOption.value.materialized_subdir || '/',
         ruleBookName: selectedRepoTypeOption.value.rulebook_name || 'noop',
         ruleBookVersion: selectedRepoTypeOption.value.rulebook_version || 'v1'
       }
@@ -190,6 +328,10 @@ const previewSettings = computed(() => {
   if (typeForm.customizeShowSize) base.showSize = !!typeForm.showSize
   if (typeForm.customizeSingleMove) base.singleMove = !!typeForm.singleMove
   if (typeForm.customizeManualEditorMode) base.manualEditorMode = String(typeForm.manualEditorMode || '').trim() || 'legacy-type-editor'
+  if (typeForm.customizeMetadataDisplayMode) base.metadataDisplayMode = String(typeForm.metadataDisplayMode || '').trim() || 'hidden'
+  if (typeForm.customizeMetadataDisplayFields) base.metadataDisplayFields = stringifyMetadataDisplayFields(typeForm.metadataDisplayFields)
+  if (typeForm.customizeArchiveSubdir) base.archiveSubdir = String(typeForm.archiveSubdir || '').trim() || 'archives'
+  if (typeForm.customizeMaterializedSubdir) base.materializedSubdir = String(typeForm.materializedSubdir || '').trim() || '/'
   if (typeForm.customizeRulebook) {
     base.ruleBookName = String(typeForm.rulebookName || '').trim() || 'noop'
     base.ruleBookVersion = String(typeForm.rulebookVersion || '').trim() || 'v1'
@@ -205,7 +347,7 @@ const canSaveSettings = computed(() => {
 
 function createTypeForm() {
   return {
-    repoTypeKey: 'manga',
+    repoTypeKey: DEFAULT_VISIBLE_REPO_TYPE_KEY,
     customizeAddButton: false,
     addButton: true,
     customizeAddDirectoryButton: false,
@@ -222,6 +364,14 @@ function createTypeForm() {
     singleMove: true,
     customizeManualEditorMode: false,
     manualEditorMode: 'legacy-type-editor',
+    customizeMetadataDisplayMode: false,
+    metadataDisplayMode: 'hidden',
+    customizeMetadataDisplayFields: false,
+    metadataDisplayFields: '',
+    customizeArchiveSubdir: false,
+    archiveSubdir: 'archives',
+    customizeMaterializedSubdir: false,
+    materializedSubdir: '/',
     customizeRulebook: false,
     rulebookName: 'noop',
     rulebookVersion: 'v1'
@@ -238,6 +388,10 @@ function defaultEffectiveSettings() {
     showSize: true,
     singleMove: true,
     manualEditorMode: 'legacy-type-editor',
+    metadataDisplayMode: 'hidden',
+    metadataDisplayFields: '',
+    archiveSubdir: 'archives',
+    materializedSubdir: '/',
     ruleBookName: 'noop',
     ruleBookVersion: 'v1'
   }
@@ -253,6 +407,10 @@ function buildSettingsOverridePayload() {
   if (typeForm.customizeShowSize) payload.show_size = !!typeForm.showSize
   if (typeForm.customizeSingleMove) payload.single_move = !!typeForm.singleMove
   if (typeForm.customizeManualEditorMode) payload.manual_editor_mode = String(typeForm.manualEditorMode || '').trim() || 'legacy-type-editor'
+  if (typeForm.customizeMetadataDisplayMode) payload.metadata_display_mode = String(typeForm.metadataDisplayMode || '').trim() || 'hidden'
+  if (typeForm.customizeMetadataDisplayFields) payload.metadata_display_fields = stringifyMetadataDisplayFields(typeForm.metadataDisplayFields)
+  if (typeForm.customizeArchiveSubdir) payload.archive_subdir = String(typeForm.archiveSubdir || '').trim() || 'archives'
+  if (typeForm.customizeMaterializedSubdir) payload.materialized_subdir = String(typeForm.materializedSubdir || '').trim() || '/'
   if (typeForm.customizeRulebook) {
     payload.rulebook_name = String(typeForm.rulebookName || '').trim() || 'noop'
     payload.rulebook_version = String(typeForm.rulebookVersion || '').trim() || 'v1'
@@ -276,6 +434,10 @@ function restoreTemplateInheritance() {
   typeForm.customizeShowSize = false
   typeForm.customizeSingleMove = false
   typeForm.customizeManualEditorMode = false
+  typeForm.customizeMetadataDisplayMode = false
+  typeForm.customizeMetadataDisplayFields = false
+  typeForm.customizeArchiveSubdir = false
+  typeForm.customizeMaterializedSubdir = false
   typeForm.customizeRulebook = false
 }
 
@@ -283,7 +445,7 @@ function applyTypeSettingsPayload(payload) {
   const override = payload?.settings_override || {}
   const effective = payload?.effective || {}
 
-  typeForm.repoTypeKey = payload?.repo_type_key || 'manga'
+  typeForm.repoTypeKey = payload?.repo_type_key || DEFAULT_VISIBLE_REPO_TYPE_KEY
 
   typeForm.customizeAddButton = typeof override?.add_button === 'boolean'
   typeForm.addButton = typeForm.customizeAddButton ? !!override.add_button : !!effective.add_button
@@ -309,6 +471,18 @@ function applyTypeSettingsPayload(payload) {
   typeForm.customizeManualEditorMode = typeof override?.manual_editor_mode === 'string'
   typeForm.manualEditorMode = typeForm.customizeManualEditorMode ? String(override.manual_editor_mode || 'legacy-type-editor') : String(effective?.manual_editor_mode || 'legacy-type-editor')
 
+  typeForm.customizeMetadataDisplayMode = typeof override?.metadata_display_mode === 'string'
+  typeForm.metadataDisplayMode = typeForm.customizeMetadataDisplayMode ? String(override.metadata_display_mode || 'hidden') : String(effective?.metadata_display_mode || 'hidden')
+
+  typeForm.customizeMetadataDisplayFields = typeof override?.metadata_display_fields === 'string'
+  typeForm.metadataDisplayFields = String(override?.metadata_display_fields || effective?.metadata_display_fields || '')
+
+  typeForm.customizeArchiveSubdir = typeof override?.archive_subdir === 'string'
+  typeForm.archiveSubdir = String(override?.archive_subdir || effective?.archive_subdir || 'archives')
+
+  typeForm.customizeMaterializedSubdir = typeof override?.materialized_subdir === 'string'
+  typeForm.materializedSubdir = String(override?.materialized_subdir || effective?.materialized_subdir || '/')
+
   typeForm.customizeRulebook = typeof override?.rulebook_name === 'string' || typeof override?.rulebook_version === 'string'
   typeForm.rulebookName = String(override?.rulebook_name || effective?.rulebook_name || 'noop')
   typeForm.rulebookVersion = String(override?.rulebook_version || effective?.rulebook_version || 'v1')
@@ -322,6 +496,10 @@ function applyTypeSettingsPayload(payload) {
     showSize: !!effective.show_size,
     singleMove: !!effective.single_move,
     manualEditorMode: effective?.manual_editor_mode || 'legacy-type-editor',
+    metadataDisplayMode: effective?.metadata_display_mode || 'hidden',
+    metadataDisplayFields: effective?.metadata_display_fields || '',
+    archiveSubdir: effective?.archive_subdir || 'archives',
+    materializedSubdir: effective?.materialized_subdir || '/',
     ruleBookName: effective?.rulebook_name || 'noop',
     ruleBookVersion: effective?.rulebook_version || 'v1'
   }
@@ -352,6 +530,82 @@ async function parseErrorMessage(res, fallback) {
   }
 
   return `${fallback} (HTTP ${res.status})`
+}
+
+async function refreshRepo() {
+  if (isBasicRepo.value) {
+    ElMessage.info('基础漫画仓库没有仓库根路径，所有内容需要手工添加')
+    return
+  }
+
+  normalizingIncremental.value = true
+  try {
+    const res = await fetch(`/api/repos/${props.repoId}/normalize/incremental`, { method: 'POST' })
+    if (!res.ok) {
+      throw new Error(await parseErrorMessage(res, '触发刷新失败'))
+    }
+
+    await res.json()
+    emitter.emit('refresh-all')
+    emitter.emit('refresh-repo', { repoId: props.repoId })
+    ElMessage.success('已触发刷新')
+  } catch (e) {
+    console.error('[RepoSettingsButton] refreshRepo failed', e)
+    ElMessage.error(e.message || '触发刷新失败')
+  } finally {
+    normalizingIncremental.value = false
+  }
+}
+
+async function deleteMissingRepoEntries() {
+  if (!props.repoId) {
+    ElMessage.error('缺少仓库信息，无法删除失效项')
+    return
+  }
+
+  const ok = window.confirm('这会批量删除当前仓库中所有“文件失踪”的记录，且不会删除任何实际文件。是否继续？')
+  if (!ok) return
+
+  deletingMissingEntries.value = true
+  try {
+    const res = await fetch(`/api/repos/${props.repoId}/repoisos/missing`, { method: 'DELETE' })
+    if (!res.ok) {
+      throw new Error(await parseErrorMessage(res, '删除所有失效项失败'))
+    }
+
+    const data = await res.json()
+    const deletedCount = Number(data?.deleted_count || 0)
+    emitter.emit('refresh-repo', { repoId: props.repoId })
+    emitter.emit('refresh-all')
+    ElMessage.success(deletedCount > 0 ? `已删除 ${deletedCount} 条失效记录` : '当前仓库没有失效记录需要删除')
+  } catch (e) {
+    console.error('[RepoSettingsButton] deleteMissingRepoEntries failed', e)
+    ElMessage.error(e.message || '删除所有失效项失败')
+  } finally {
+    deletingMissingEntries.value = false
+  }
+}
+
+async function generateRefreshProposalQueue() {
+  if (!props.repoId) {
+    ElMessage.error('缺少仓库信息，无法生成提案队列')
+    return
+  }
+
+  generatingProposalQueue.value = true
+  try {
+    emitter.emit('repo-refresh-proposals', { repoId: props.repoId })
+  } finally {
+    generatingProposalQueue.value = false
+  }
+}
+
+function openRefreshProposalQueue() {
+  if (!props.repoId) {
+    ElMessage.error('缺少仓库信息，无法查看提案队列')
+    return
+  }
+  emitter.emit('repo-open-refresh-proposals', { repoId: props.repoId })
 }
 
 async function fetchCurrentRepoName() {
@@ -391,7 +645,7 @@ async function fetchCurrentRepoName() {
 }
 
 async function fetchRepoTypeOptions() {
-  const res = await fetch('/api/repo-types?include_disabled=true')
+  const res = await fetch('/api/repo-types?include_disabled=true&include_hidden=true')
   if (!res.ok) {
     throw new Error(await parseErrorMessage(res, '获取仓库类型失败'))
   }
@@ -442,6 +696,9 @@ async function refreshRepoInfoState(showErrorToast = false) {
 
 async function openDialog() {
   inputRepoName.value = currentRepoName.value
+  bulkActionsCollapsed.value = true
+  overlayCollapsed.value = true
+  previewCollapsed.value = true
   dialogVisible.value = true
   await refreshRepoInfoState(true)
 }
@@ -497,34 +754,6 @@ async function saveRepoSettings() {
   }
 }
 
-async function deleteRepo() {
-  if (isBasicRepo.value) {
-    ElMessage.warning('基础漫画仓库不允许删除')
-    return
-  }
-
-  const ok = window.confirm('确认删除这个仓库记录吗？不会删除任何实际元素文件。')
-  if (!ok) return
-
-  deleting.value = true
-  try {
-    const res = await fetch(`/api/repos/${props.repoId}`, { method: 'DELETE' })
-    if (!res.ok) {
-      throw new Error(await parseErrorMessage(res, '删除仓库失败'))
-    }
-
-    dialogVisible.value = false
-    emit('deleted')
-    emitter.emit('refresh-all')
-    ElMessage.success('仓库已删除')
-  } catch (e) {
-    console.error('[RepoSettingsButton] deleteRepo failed', e)
-    ElMessage.error(e.message || '删除仓库失败')
-  } finally {
-    deleting.value = false
-  }
-}
-
 watch(
   () => props.repoId,
   () => {
@@ -567,6 +796,75 @@ watch(
   line-height: 1.5;
 }
 
+.collapsible-section-stack {
+  margin-top: 16px;
+}
+
+.collapsible-section-stack > * + * {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #dbe3ee;
+}
+
+.settings-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-action-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #dbe4ee;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.settings-action-card-danger {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.settings-action-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-action-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.settings-action-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.settings-action-disabled-hint {
+  font-size: 13px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.overlay-inline-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.preview-help-text {
+  margin-top: 12px;
+}
+
 .type-option-row {
   display: flex;
   align-items: center;
@@ -580,7 +878,6 @@ watch(
 }
 
 .overlay-box {
-  margin-top: 10px;
   border: 1px solid #dbe3ee;
   border-radius: 12px;
   background: #f8fafc;
@@ -595,6 +892,14 @@ watch(
   padding: 6px 0;
 }
 
+.overlay-row-textarea {
+  align-items: flex-start;
+}
+
+.overlay-textarea-wrap {
+  flex: 1;
+}
+
 .rulebook-overlay-row {
   align-items: flex-start;
 }
@@ -607,18 +912,10 @@ watch(
 }
 
 .preview-box {
-  margin-top: 14px;
   border: 1px solid #dbe3ee;
   border-radius: 12px;
   padding: 12px;
   background: #fff;
-}
-
-.preview-title {
-  margin-bottom: 8px;
-  color: #334155;
-  font-size: 13px;
-  font-weight: 700;
 }
 
 .preview-grid {
@@ -633,7 +930,7 @@ watch(
   width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -641,5 +938,16 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .settings-action-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .settings-action-disabled-hint {
+    white-space: normal;
+  }
 }
 </style>

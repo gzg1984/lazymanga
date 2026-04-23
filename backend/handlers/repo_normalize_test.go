@@ -116,6 +116,58 @@ func TestCollectRepoISORecordsByScanSpecScopeOnlyIncludesSubtree(t *testing.T) {
 	}
 }
 
+func TestCollectRepoISORecordsByScanSpecSkipsExcludedArchiveRoot(t *testing.T) {
+	root := t.TempDir()
+	paths := []string{
+		"archives/raw/vol01.cbz",
+		"library/series/vol02.cbz",
+		"root-visible.cbz",
+	}
+	for _, rel := range paths {
+		abs := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir failed: %v", err)
+		}
+		if err := os.WriteFile(abs, []byte(rel), 0o644); err != nil {
+			t.Fatalf("write file failed: %v", err)
+		}
+	}
+
+	excludedRoot := filepath.Join(root, "archives")
+	records, err := collectRepoISORecordsByScanSpec(root, rulebook.ScanSpec{Extensions: []string{".cbz"}}, "", excludedRoot)
+	if err != nil {
+		t.Fatalf("collectRepoISORecordsByScanSpec failed: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records after excluding archive root, got %d: %#v", len(records), records)
+	}
+	for _, record := range records {
+		if strings.HasPrefix(record.Path, "archives/") {
+			t.Fatalf("expected archive path to be excluded, got %q", record.Path)
+		}
+	}
+}
+
+func TestResolveRepoArchivePathsUsesRootCompatibleMaterializedMode(t *testing.T) {
+	root := filepath.Clean(t.TempDir())
+	paths, err := resolveRepoArchivePaths(root, repoTypeSettings{
+		ArchiveSubdir:      defaultArchiveSubdir,
+		MaterializedSubdir: defaultMaterializedSubdir,
+	})
+	if err != nil {
+		t.Fatalf("resolveRepoArchivePaths failed: %v", err)
+	}
+	if paths.MaterializedRootAbs != root {
+		t.Fatalf("expected materialized root %q, got %q", root, paths.MaterializedRootAbs)
+	}
+	if len(paths.ExcludeRootAbsPaths) != 1 {
+		t.Fatalf("expected one excluded root, got %#v", paths.ExcludeRootAbsPaths)
+	}
+	if filepath.Clean(paths.ExcludeRootAbsPaths[0]) != filepath.Join(root, defaultArchiveSubdir) {
+		t.Fatalf("unexpected excluded root: %q", paths.ExcludeRootAbsPaths[0])
+	}
+}
+
 func TestShouldBlockFullRepoScanForBasicRepo(t *testing.T) {
 	basicRepo := models.Repository{Basic: true}
 	if !shouldBlockFullRepoScan(basicRepo, "") {
@@ -131,25 +183,33 @@ func TestShouldBlockFullRepoScanForBasicRepo(t *testing.T) {
 	}
 }
 
-func TestInferRepoTypeKeyFromInfoDefaultsBasicRepoToManga(t *testing.T) {
+func TestInferRepoTypeKeyFromInfoDefaultsBasicRepoToManualManga(t *testing.T) {
 	got := inferRepoTypeKeyFromInfo(models.RepoInfo{Basic: true}, models.Repository{Basic: true})
-	if got != defaultRepoTypeKey {
-		t.Fatalf("expected basic repo default type %q, got %q", defaultRepoTypeKey, got)
+	if got != manualMangaRepoTypeKey {
+		t.Fatalf("expected basic repo default type %q, got %q", manualMangaRepoTypeKey, got)
+	}
+
+	got = inferRepoTypeKeyFromInfo(models.RepoInfo{Basic: true, RepoTypeKey: manualMangaRepoTypeKey}, models.Repository{Basic: true, RepoTypeKey: manualMangaRepoTypeKey})
+	if got != manualMangaRepoTypeKey {
+		t.Fatalf("expected basic repo type to stay %q, got %q", manualMangaRepoTypeKey, got)
 	}
 
 	got = inferRepoTypeKeyFromInfo(models.RepoInfo{Basic: true, RepoTypeKey: repoTypeNone}, models.Repository{Basic: true, RepoTypeKey: repoTypeNone})
-	if got != defaultRepoTypeKey {
-		t.Fatalf("expected basic repo to migrate legacy type %q to %q, got %q", repoTypeNone, defaultRepoTypeKey, got)
+	if got != manualMangaRepoTypeKey {
+		t.Fatalf("expected legacy basic repo type %q to migrate to %q, got %q", repoTypeNone, manualMangaRepoTypeKey, got)
 	}
 }
 
-func TestBuildRepoInfoFromRepositoryDefaultsBasicRepoTypeToManga(t *testing.T) {
+func TestBuildRepoInfoFromRepositoryDefaultsBasicRepoTypeToManualManga(t *testing.T) {
 	info, err := buildRepoInfoFromRepository(models.Repository{Basic: true, Name: basicRepoName})
 	if err != nil {
 		t.Fatalf("buildRepoInfoFromRepository failed: %v", err)
 	}
-	if info.RepoTypeKey != defaultRepoTypeKey {
-		t.Fatalf("expected basic repo info type %q, got %q", defaultRepoTypeKey, info.RepoTypeKey)
+	if info.RepoTypeKey != manualMangaRepoTypeKey {
+		t.Fatalf("expected basic repo info type %q, got %q", manualMangaRepoTypeKey, info.RepoTypeKey)
+	}
+	if !info.AddDirectoryButton {
+		t.Fatal("expected basic repo info to enable add-directory before preset sync")
 	}
 }
 

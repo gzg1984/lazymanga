@@ -44,7 +44,6 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 	if err != nil {
 		return result, fmt.Errorf("invalid scan scope: %w", err)
 	}
-	result.ScanScope = normalizedScope
 	if shouldBlockFullRepoScan(repo, normalizedScope) {
 		return result, fmt.Errorf("full repo scan is disabled for basic repositories")
 	}
@@ -55,11 +54,28 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 	}
 	result.RootAbs = rootAbs
 	result.DBPath = dbPath
+	repoInfo, err := EnsureRepoInfoFromRepository(repoDB, repo)
+	if err != nil {
+		return result, fmt.Errorf("ensure repo info failed: %w", err)
+	}
+	_, _, _, effectiveSettings, _, err := resolveEffectiveRepoTypeSettings(repoInfo, repo)
+	if err != nil {
+		return result, fmt.Errorf("resolve repo type settings failed: %w", err)
+	}
+	archivePaths, err := resolveRepoArchivePaths(rootAbs, effectiveSettings)
+	if err != nil {
+		return result, fmt.Errorf("resolve archive paths failed: %w", err)
+	}
+	effectiveScope := normalizedScope
+	if effectiveScope == "" && archivePaths.MaterializedSubdir != defaultMaterializedSubdir {
+		effectiveScope = archivePaths.MaterializedSubdir
+	}
+	result.ScanScope = effectiveScope
 
 	scanSpec := normalization.GetRuleBookScanSpecForRepo(repo.ID, repoDB)
-	log.Printf("runRepoIncrementalNormalize: scan spec repo=%d scope=%q extensions=%v include_no_ext=%t dir_rules=%d", repo.ID, normalizedScope, scanSpec.Extensions, scanSpec.IncludeFilesWithoutExt, len(scanSpec.DirectoryRules))
+	log.Printf("runRepoIncrementalNormalize: scan spec repo=%d scope=%q extensions=%v include_no_ext=%t dir_rules=%d", repo.ID, effectiveScope, scanSpec.Extensions, scanSpec.IncludeFilesWithoutExt, len(scanSpec.DirectoryRules))
 
-	records, err := collectRepoISORecordsByScanSpec(rootAbs, scanSpec, normalizedScope)
+	records, err := collectRepoISORecordsByScanSpec(rootAbs, scanSpec, effectiveScope, archivePaths.ExcludeRootAbsPaths...)
 	if err != nil {
 		return result, fmt.Errorf("scan repo path failed: %w", err)
 	}
@@ -67,8 +83,8 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 
 	var existingRows []models.RepoISO
 	existingQuery := repoDB
-	if normalizedScope != "" {
-		existingQuery = existingQuery.Where("path = ? OR path LIKE ?", normalizedScope, normalizedScope+"/%")
+	if effectiveScope != "" {
+		existingQuery = existingQuery.Where("path = ? OR path LIKE ?", effectiveScope, effectiveScope+"/%")
 	}
 	if err := existingQuery.Find(&existingRows).Error; err != nil {
 		return result, fmt.Errorf("query repoisos failed: %w", err)
@@ -79,10 +95,12 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 	for _, scanned := range records {
 		scannedByPath[scanned.Path] = scanned
 	}
+	coveredScannedPaths := make(map[string]struct{}, len(records))
 
 	for i := range existingRows {
 		row := &existingRows[i]
 		prevMissing := row.IsMissing
+		originalPath := row.Path
 
 		if scanned, ok := scannedByPath[row.Path]; ok && row.IsDirectory != scanned.IsDirectory {
 			if err := repoDB.Model(&models.RepoISO{}).Where("id = ?", row.ID).Update("is_directory", scanned.IsDirectory).Error; err != nil {
@@ -115,6 +133,19 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 			return result, fmt.Errorf("update missing flag failed: %w", err)
 		}
 
+		if _, ok := scannedByPath[originalPath]; ok {
+			coveredScannedPaths[originalPath] = struct{}{}
+		}
+		if !missing && row.IsDirectory {
+			coveredPaths, err := refreshExistingDirectoryRepoISO(repo.ID, repoDB, rootAbs, row)
+			if err != nil {
+				return result, fmt.Errorf("refresh existing directory repo iso failed: %w", err)
+			}
+			for _, coveredPath := range coveredPaths {
+				coveredScannedPaths[coveredPath] = struct{}{}
+			}
+		}
+
 		if !prevMissing && missing {
 			result.ExistingMissingMarkedCount++
 		}
@@ -130,6 +161,9 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 
 	newRecords := make([]models.RepoISO, 0)
 	for _, scanned := range records {
+		if _, ok := coveredScannedPaths[scanned.Path]; ok {
+			continue
+		}
 		if _, ok := existingByPath[scanned.Path]; ok {
 			continue
 		}
@@ -151,7 +185,7 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 		}
 		needsSize := row.SizeBytes <= 0
 		needsMD5 := !row.IsDirectory && strings.TrimSpace(row.MD5) == ""
-		needsDirectoryMetadata := row.IsDirectory && strings.TrimSpace(row.MetadataJSON) == ""
+		needsDirectoryMetadata := false
 		if needsSize || needsMD5 || needsDirectoryMetadata {
 			missingMetaRows = append(missingMetaRows, row)
 		}
@@ -166,6 +200,43 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 	}
 
 	return result, nil
+}
+
+func refreshExistingDirectoryRepoISO(repoID uint, repoDB *gorm.DB, rootAbs string, row *models.RepoISO) ([]string, error) {
+	if row == nil || row.IsMissing || !row.IsDirectory {
+		return nil, nil
+	}
+	originalPath := row.Path
+	pathMoved, _, err := refreshDirectoryRecordMetadata(repoID, repoDB, rootAbs, row)
+	if err != nil {
+		return nil, err
+	}
+	return coveredScannedPathsForExistingRow(originalPath, row, pathMoved), nil
+}
+
+func coveredScannedPathsForExistingRow(originalPath string, row *models.RepoISO, pathMoved bool) []string {
+	paths := make([]string, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	for _, candidate := range []string{originalPath} {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		paths = append(paths, trimmed)
+	}
+	if pathMoved && row != nil {
+		trimmed := strings.TrimSpace(row.Path)
+		if trimmed != "" {
+			if _, ok := seen[trimmed]; !ok {
+				paths = append(paths, trimmed)
+			}
+		}
+	}
+	return paths
 }
 
 func triggerRepoIncrementalNormalize(repo models.Repository, reason string, scanScopes ...string) {
@@ -290,9 +361,28 @@ func ForceNormalizeRepo(c *gin.Context) {
 	collectStartedAt := time.Now()
 	log.Printf("ForceNormalizeRepo: collect stage start id=%d root=%q", repo.ID, rootAbs)
 	scanSpec := normalization.GetRuleBookScanSpecForRepo(repo.ID, repoDB)
-	log.Printf("ForceNormalizeRepo: scan spec repo=%d scope=%q extensions=%v include_no_ext=%t dir_rules=%d", repo.ID, "", scanSpec.Extensions, scanSpec.IncludeFilesWithoutExt, len(scanSpec.DirectoryRules))
+	repoInfo, err := EnsureRepoInfoFromRepository(repoDB, repo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load repo info failed: " + err.Error()})
+		return
+	}
+	_, _, _, effectiveSettings, _, err := resolveEffectiveRepoTypeSettings(repoInfo, repo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "resolve repo type settings failed: " + err.Error()})
+		return
+	}
+	archivePaths, err := resolveRepoArchivePaths(rootAbs, effectiveSettings)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "resolve archive paths failed: " + err.Error()})
+		return
+	}
+	effectiveScope := ""
+	if archivePaths.MaterializedSubdir != defaultMaterializedSubdir {
+		effectiveScope = archivePaths.MaterializedSubdir
+	}
+	log.Printf("ForceNormalizeRepo: scan spec repo=%d scope=%q extensions=%v include_no_ext=%t dir_rules=%d", repo.ID, effectiveScope, scanSpec.Extensions, scanSpec.IncludeFilesWithoutExt, len(scanSpec.DirectoryRules))
 
-	records, err := collectRepoISORecordsByScanSpec(rootAbs, scanSpec, "")
+	records, err := collectRepoISORecordsByScanSpec(rootAbs, scanSpec, effectiveScope, archivePaths.ExcludeRootAbsPaths...)
 	if err != nil {
 		log.Printf("ForceNormalizeRepo: scan failed id=%s root=%s error=%v", id, rootAbs, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "scan repo path failed: " + err.Error()})
@@ -326,7 +416,7 @@ func ForceNormalizeRepo(c *gin.Context) {
 	})
 }
 
-func collectRepoISORecordsByScanSpec(rootAbs string, scanSpec rulebook.ScanSpec, scanScope string) ([]models.RepoISO, error) {
+func collectRepoISORecordsByScanSpec(rootAbs string, scanSpec rulebook.ScanSpec, scanScope string, excludeRootAbsPaths ...string) ([]models.RepoISO, error) {
 	startedAt := time.Now()
 	normalizedScope, err := normalizeRepoScanScope(scanScope)
 	if err != nil {
@@ -354,10 +444,27 @@ func collectRepoISORecordsByScanSpec(rootAbs string, scanSpec rulebook.ScanSpec,
 	visitedFiles := 0
 	matchedFiles := 0
 	matchedDirs := 0
+	normalizedExcludedRoots := make([]string, 0, len(excludeRootAbsPaths))
+	for _, excluded := range excludeRootAbsPaths {
+		trimmed := strings.TrimSpace(excluded)
+		if trimmed == "" {
+			continue
+		}
+		normalizedExcludedRoots = append(normalizedExcludedRoots, filepath.Clean(trimmed))
+	}
 
 	err = filepath.WalkDir(scanRootAbs, func(absPath string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		cleanAbsPath := filepath.Clean(absPath)
+		for _, excludedRoot := range normalizedExcludedRoots {
+			if cleanAbsPath == excludedRoot || strings.HasPrefix(cleanAbsPath+string(os.PathSeparator), excludedRoot+string(os.PathSeparator)) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 
 		if d.IsDir() {

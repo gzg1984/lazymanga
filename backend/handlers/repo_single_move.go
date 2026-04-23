@@ -96,6 +96,11 @@ func MoveSingleRepoISO(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "load target repo info failed: " + err.Error()})
 		return
 	}
+	_, _, _, targetEffectiveSettings, _, err := resolveEffectiveRepoTypeSettings(targetInfo, targetRepo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "resolve target repo type settings failed: " + err.Error()})
+		return
+	}
 
 	relPath := strings.TrimSpace(sourceRow.Path)
 	if relPath == "" {
@@ -108,11 +113,18 @@ func MoveSingleRepoISO(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "resolve source path failed: " + err.Error()})
 		return
 	}
-	targetAbs, err := resolveRepoISOAbsPath(targetRootAbs, relPath)
+	transferPlan, err := planRepoTransfer(targetRootAbs, sourceAbs, sourceRow, targetEffectiveSettings)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "resolve target path failed: " + err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "plan target path failed: " + err.Error()})
 		return
 	}
+	targetAbs := transferPlan.TargetAbs
+	targetRelPath, err := filepath.Rel(targetRootAbs, targetAbs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "resolve target relative path failed: " + err.Error()})
+		return
+	}
+	targetRelPath = filepath.ToSlash(targetRelPath)
 
 	if _, err := os.Stat(sourceAbs); err != nil {
 		if os.IsNotExist(err) {
@@ -124,7 +136,7 @@ func MoveSingleRepoISO(c *gin.Context) {
 	}
 
 	var existingTargetRow models.RepoISO
-	if err := targetDB.Where("path = ?", relPath).First(&existingTargetRow).Error; err == nil {
+	if err := targetDB.Where("path = ?", targetRelPath).First(&existingTargetRow).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "target repo record already exists for same path", "target_repo_iso_id": existingTargetRow.ID})
 		return
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -157,6 +169,15 @@ func MoveSingleRepoISO(c *gin.Context) {
 
 	targetRow := sourceRow
 	targetRow.ID = 0
+	targetRow.Path = targetRelPath
+	targetRow.FileName = filepath.Base(targetAbs)
+	metadataJSON, err := buildImportedFileMetadataJSONFromExisting(sourceRow.MetadataJSON, transferPlan.ItemKind, targetRelPath, targetRow.FileName, sourceRow.Path)
+	if err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update target metadata failed: " + err.Error()})
+		return
+	}
+	targetRow.MetadataJSON = metadataJSON
 	if err := tx.Create(&targetRow).Error; err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "insert target record failed: " + err.Error()})
@@ -190,7 +211,9 @@ func MoveSingleRepoISO(c *gin.Context) {
 		"target_repo_id":             targetRepo.ID,
 		"source_repo_iso_id":         sourceRow.ID,
 		"target_repo_iso_id":         targetRow.ID,
-		"path":                       relPath,
+		"path":                       targetRelPath,
+		"import_kind":                transferPlan.ItemKind,
+		"target_subdir":              transferPlan.TargetSubdir,
 		"target_auto_normalize":      targetInfo.AutoNormalize,
 		"target_normalize_async":     normalizeAsync,
 		"target_normalize_row_count": normalizeRowCount,

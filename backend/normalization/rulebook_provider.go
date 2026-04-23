@@ -514,6 +514,8 @@ func fallbackRuleBookByName(name string) rulebook.RuleBook {
 	switch strings.TrimSpace(strings.ToLower(name)) {
 	case osRuleBookName:
 		return rulebook.DefaultOSRelocationRuleBook()
+	case "manga-manual":
+		return rulebook.DefaultManualMangaRuleBook()
 	case "manga-files":
 		return rulebook.DefaultMangaFilesRuleBook()
 	case "karita-manga":
