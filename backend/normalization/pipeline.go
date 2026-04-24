@@ -50,11 +50,10 @@ func StartAsyncPostIndexNormalization(repoID uint, repoDB *gorm.DB, rootAbs stri
 	newDefaultPipeline().startAsync(repoID, repoDB, rootAbs, records)
 }
 
-// StartAsyncMetadataBackfill backfills metadata fields only (size + md5) for existing records.
+// StartAsyncMetadataBackfill backfills low-cost file metadata only (size + md5) for existing records.
 func StartAsyncMetadataBackfill(repoID uint, repoDB *gorm.DB, rootAbs string, records []models.RepoISO) {
 	p := &Pipeline{
 		steps: []RecordStep{
-			NewDirectoryTransformStep(),
 			NewFileSizeBackfillStep(),
 			NewMD5BackfillStep(),
 		},

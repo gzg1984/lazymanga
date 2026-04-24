@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"lazymanga/models"
 	"lazymanga/normalization/rulebook"
@@ -405,7 +406,8 @@ func renderDirectoryTransformFromMetadata(transform *rulebook.DirectoryTransform
 		}
 	}
 
-	targetName := sanitizePathSegment(renderDirectoryTemplate(renameTemplate, context))
+	namePolicy := strings.TrimSpace(transform.NamePolicy)
+	targetName := applyDirectoryNamePolicy(namePolicy, renderDirectoryTemplate(renameTemplate, context))
 	if targetName == "" {
 		return "", nil, fmt.Errorf("directory transform rendered empty name for %q", currentName)
 	}
@@ -415,7 +417,7 @@ func renderDirectoryTransformFromMetadata(transform *rulebook.DirectoryTransform
 
 	if targetPathTemplate := strings.TrimSpace(transform.TargetPathTemplate); targetPathTemplate != "" {
 		context["normalized_name"] = targetName
-		renderedPath := sanitizeRelativeDirectoryPath(renderDirectoryTemplate(targetPathTemplate, context))
+		renderedPath := applyDirectoryPathPolicy(namePolicy, renderDirectoryTemplate(targetPathTemplate, context))
 		if renderedPath == "" {
 			return "", nil, fmt.Errorf("directory transform rendered empty target path for %q", currentName)
 		}
@@ -479,7 +481,7 @@ func ApplyDirectoryMetadataEdit(repoID uint, repoDB *gorm.DB, rootAbs string, re
 		return false, err
 	}
 
-	if overrideName := sanitizePathSegment(strings.TrimSpace(manualName)); overrideName != "" {
+	if overrideName := applyDirectoryNamePolicy(strings.TrimSpace(matchedRule.Transform.NamePolicy), manualName); overrideName != "" {
 		targetName = overrideName
 		captures["normalized_name"] = overrideName
 		parentDir := filepath.ToSlash(filepath.Dir(record.Path))
@@ -600,6 +602,65 @@ func sanitizePathSegment(name string) string {
 	name = replacer.Replace(strings.TrimSpace(name))
 	name = strings.Trim(name, ". ")
 	return strings.TrimSpace(name)
+}
+
+func applyDirectoryPathPolicy(policy string, raw string) string {
+	parts := splitRelativePathParts(raw)
+	if len(parts) == 0 {
+		return ""
+	}
+	normalized := make([]string, 0, len(parts))
+	for _, part := range parts {
+		next := applyDirectoryNamePolicy(policy, part)
+		if next == "" {
+			continue
+		}
+		normalized = append(normalized, next)
+	}
+	return sanitizeRelativeDirectoryPath(strings.Join(normalized, "/"))
+}
+
+func applyDirectoryNamePolicy(policy string, name string) string {
+	cleaned := sanitizePathSegment(name)
+	if cleaned == "" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "kavita-manga":
+		return normalizeKavitaMangaName(cleaned)
+	default:
+		return cleaned
+	}
+}
+
+func normalizeKavitaMangaName(name string) string {
+	cleaned := strings.TrimSpace(name)
+	if cleaned == "" {
+		return ""
+	}
+	cleaned = strings.ReplaceAll(cleaned, "~", "-")
+
+	runes := []rune(cleaned)
+	leadingStars := 0
+	for leadingStars < len(runes) {
+		if runes[leadingStars] != '*' && runes[leadingStars] != '＊' {
+			break
+		}
+		leadingStars++
+	}
+	if leadingStars > 0 {
+		rest := strings.TrimLeftFunc(string(runes[leadingStars:]), unicode.IsSpace)
+		cleaned = strings.TrimSpace("star " + rest)
+	}
+
+	if strings.HasPrefix(cleaned, "(") {
+		cleaned = "括号" + strings.TrimLeftFunc(strings.TrimPrefix(cleaned, "("), unicode.IsSpace)
+	}
+	if strings.HasPrefix(cleaned, "（") {
+		cleaned = "括号" + strings.TrimLeftFunc(strings.TrimPrefix(cleaned, "（"), unicode.IsSpace)
+	}
+
+	return sanitizePathSegment(cleaned)
 }
 
 func sanitizeRelativeDirectoryPath(raw string) string {

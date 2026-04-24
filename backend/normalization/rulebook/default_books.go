@@ -93,6 +93,7 @@ func DefaultKaritaMangaRuleBook() RuleBook {
 					Pattern:            `^\[(?P<circle>[^\]]+)\]\s*(?P<title>.+?)(?:\s+\((?P<year>\d{4})\))?(?:\s+\[(?P<karita_id>\d+)\])?$`,
 					RecognizerName:     "karita-manga-filename",
 					RecognizerVersion:  "v1",
+					NamePolicy:         "kavita-manga",
 					RenameTemplate:     `${title}`,
 					TargetPathTemplate: `${title}`,
 					MetadataFile:       ".karita.meta.json",

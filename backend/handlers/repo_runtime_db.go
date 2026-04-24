@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const repoSQLiteBusyTimeoutMillis = 10000
+
 func openRepoScopedDB(repo models.Repository) (*gorm.DB, string, string, error) {
 	rootAbs, err := resolveRepoRootAbs(repo)
 	if err != nil {
@@ -57,9 +59,26 @@ func openRepoScopedDB(repo models.Repository) (*gorm.DB, string, string, error) 
 		}
 	}
 
-	repoDB, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	repoDB, err := gorm.Open(sqlite.Open(buildRepoSQLiteDSN(dbPath)), &gorm.Config{})
 	if err != nil {
 		return nil, "", "", fmt.Errorf("open repo db failed: %w", err)
+	}
+
+	sqlDB, err := repoDB.DB()
+	if err != nil {
+		return nil, "", "", fmt.Errorf("resolve repo sql db failed: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+
+	if err := repoDB.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", repoSQLiteBusyTimeoutMillis)).Error; err != nil {
+		return nil, "", "", fmt.Errorf("set repo db busy timeout failed: %w", err)
+	}
+	if err := repoDB.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
+		return nil, "", "", fmt.Errorf("set repo db journal mode failed: %w", err)
+	}
+	if err := repoDB.Exec("PRAGMA synchronous = NORMAL").Error; err != nil {
+		return nil, "", "", fmt.Errorf("set repo db synchronous mode failed: %w", err)
 	}
 
 	if err := repoDB.AutoMigrate(&models.RepoInfo{}, &models.RepoISO{}); err != nil {
@@ -67,6 +86,10 @@ func openRepoScopedDB(repo models.Repository) (*gorm.DB, string, string, error) 
 	}
 
 	return repoDB, rootAbs, dbPath, nil
+}
+
+func buildRepoSQLiteDSN(dbPath string) string {
+	return fmt.Sprintf("%s?_busy_timeout=%d&_journal_mode=WAL&_synchronous=NORMAL", dbPath, repoSQLiteBusyTimeoutMillis)
 }
 
 func resolveRepoRootAbs(repo models.Repository) (string, error) {

@@ -29,15 +29,28 @@ type repoIncrementalNormalizeResult struct {
 	ExistingMissingRecoveredCount int
 	ExistingMissingTotalCount     int
 	ExistingMissingMetaCount      int
+	ExistingMetadataRefreshCount  int
 	InsertedNewISOCount           int
 	NewRecordsAsyncSteps          []string
 	ExistingAsyncSteps            []string
 }
 
+func repoIncrementalExistingAsyncStepNames() []string {
+	return []string{"repoiso-refresh-metadata", "file-size-backfill", "md5-backfill"}
+}
+
+func shouldAttemptRepoISOIncrementalMetadataRefresh(row models.RepoISO) bool {
+	if row.IsMissing {
+		return false
+	}
+	trimmed := strings.TrimSpace(row.MetadataJSON)
+	return trimmed == "" || trimmed == "{}"
+}
+
 func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repoIncrementalNormalizeResult, error) {
 	result := repoIncrementalNormalizeResult{
 		NewRecordsAsyncSteps: normalization.DefaultStepNames(),
-		ExistingAsyncSteps:   []string{"directory-transform", "file-size-backfill", "md5-backfill"},
+		ExistingAsyncSteps:   repoIncrementalExistingAsyncStepNames(),
 	}
 
 	normalizedScope, err := normalizeRepoScanScope(scanScope)
@@ -178,6 +191,7 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 	}
 
 	missingMetaRows := make([]models.RepoISO, 0)
+	metadataRefreshRows := make([]models.RepoISO, 0)
 	for _, row := range existingRows {
 		if row.IsMissing {
 			result.ExistingMissingTotalCount++
@@ -185,12 +199,18 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 		}
 		needsSize := row.SizeBytes <= 0
 		needsMD5 := !row.IsDirectory && strings.TrimSpace(row.MD5) == ""
-		needsDirectoryMetadata := false
-		if needsSize || needsMD5 || needsDirectoryMetadata {
+		needsMetadataRefresh := shouldAttemptRepoISOIncrementalMetadataRefresh(row)
+		if needsSize || needsMD5 {
 			missingMetaRows = append(missingMetaRows, row)
 		}
+		if needsMetadataRefresh {
+			metadataRefreshRows = append(metadataRefreshRows, row)
+		}
+		if needsSize || needsMD5 || needsMetadataRefresh {
+			result.ExistingMissingMetaCount++
+		}
 	}
-	result.ExistingMissingMetaCount = len(missingMetaRows)
+	result.ExistingMetadataRefreshCount = len(metadataRefreshRows)
 
 	if len(newRecords) > 0 {
 		normalization.StartAsyncPostIndexNormalization(repo.ID, repoDB, rootAbs, newRecords)
@@ -198,8 +218,92 @@ func runRepoIncrementalNormalize(repo models.Repository, scanScope string) (repo
 	if len(missingMetaRows) > 0 {
 		normalization.StartAsyncMetadataBackfill(repo.ID, repoDB, rootAbs, missingMetaRows)
 	}
+	if len(metadataRefreshRows) > 0 {
+		if err := triggerRepoISOIncrementalMetadataRefresh(repo, repoInfo, metadataRefreshRows); err != nil {
+			return result, err
+		}
+	}
 
 	return result, nil
+}
+
+func triggerRepoISOIncrementalMetadataRefresh(repo models.Repository, info models.RepoInfo, rows []models.RepoISO) error {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	repoDBForAsync, _, _, err := openRepoScopedDB(repo)
+	if err != nil {
+		return fmt.Errorf("open repo db for async metadata refresh failed: %w", err)
+	}
+
+	queued := make([]models.RepoISO, len(rows))
+	copy(queued, rows)
+
+	go func(r models.Repository, repoInfo models.RepoInfo, repoDB *gorm.DB, candidates []models.RepoISO) {
+		startedAt := time.Now()
+		applied := 0
+		failed := 0
+		skipped := 0
+
+		for i := range candidates {
+			row := candidates[i]
+			if !shouldAttemptRepoISOIncrementalMetadataRefresh(row) {
+				skipped++
+				continue
+			}
+
+			ctx, ctxErr := prepareRepoISORefreshProposalContext(r, repoDB, repoInfo, row)
+			if ctxErr != nil {
+				failed++
+				log.Printf("triggerRepoISOIncrementalMetadataRefresh: prepare context failed repo=%d row=%d path=%q error=%v", r.ID, row.ID, row.Path, ctxErr)
+				continue
+			}
+			if ctx == nil {
+				skipped++
+				continue
+			}
+
+			proposal, proposalErr := buildRepoISORefreshMetadataProposalWithContext(ctx, row)
+			if proposalErr != nil {
+				failed++
+				log.Printf("triggerRepoISOIncrementalMetadataRefresh: build proposal failed repo=%d row=%d path=%q error=%v", r.ID, row.ID, row.Path, proposalErr)
+				continue
+			}
+			if proposal == nil || len(proposal.Metadata) == 0 {
+				skipped++
+				continue
+			}
+
+			metadataJSON, marshalErr := buildManualEditMetadataJSON(proposal.Metadata)
+			if marshalErr != nil {
+				failed++
+				log.Printf("triggerRepoISOIncrementalMetadataRefresh: encode metadata failed repo=%d row=%d path=%q error=%v", r.ID, row.ID, row.Path, marshalErr)
+				continue
+			}
+			if strings.TrimSpace(metadataJSON) == "" {
+				skipped++
+				continue
+			}
+
+			update := repoDB.Model(&models.RepoISO{}).
+				Where("id = ?", row.ID).
+				Where("metadata_json IS NULL OR TRIM(metadata_json) = '' OR TRIM(metadata_json) = '{}' ").
+				Updates(map[string]any{"metadata_json": metadataJSON})
+			if update.Error != nil {
+				failed++
+				log.Printf("triggerRepoISOIncrementalMetadataRefresh: update metadata failed repo=%d row=%d path=%q error=%v", r.ID, row.ID, row.Path, update.Error)
+				continue
+			}
+			if update.RowsAffected > 0 {
+				applied++
+			}
+		}
+
+		log.Printf("triggerRepoISOIncrementalMetadataRefresh: done repo=%d total=%d applied=%d skipped=%d failed=%d elapsed=%s", r.ID, len(candidates), applied, skipped, failed, time.Since(startedAt).Truncate(time.Millisecond))
+	}(repo, info, repoDBForAsync, queued)
+
+	return nil
 }
 
 func refreshExistingDirectoryRepoISO(repoID uint, repoDB *gorm.DB, rootAbs string, row *models.RepoISO) ([]string, error) {
@@ -267,7 +371,7 @@ func triggerRepoIncrementalNormalize(repo models.Repository, reason string, scan
 
 // ForceNormalizeRepoIncremental scans current repo root and inserts only new ISO rows.
 // New rows run full async normalization (relocation + size + md5).
-// Existing rows only backfill missing metadata (size/md5) asynchronously.
+// Existing rows only backfill missing size/md5, mark missing entries, and attempt one metadata proposal fill when metadata_json is empty.
 func ForceNormalizeRepoIncremental(c *gin.Context) {
 	startedAt := time.Now()
 	log.Printf("ForceNormalizeRepoIncremental: start method=%s path=%s remote=%s", c.Request.Method, c.Request.URL.Path, c.ClientIP())
@@ -315,13 +419,14 @@ func ForceNormalizeRepoIncremental(c *gin.Context) {
 		"existing_missing_total_count":     result.ExistingMissingTotalCount,
 		"inserted_new_iso_count":           result.InsertedNewISOCount,
 		"existing_missing_meta_count":      result.ExistingMissingMetaCount,
+		"existing_metadata_refresh_count":  result.ExistingMetadataRefreshCount,
 		"new_records_async_steps":          result.NewRecordsAsyncSteps,
 		"existing_async_steps":             result.ExistingAsyncSteps,
 		"normalize_async":                  true,
 	})
 }
 
-// ForceNormalizeRepo scans all files matched by the current rule book and rebuilds repoisos table in repo-local DB.
+// ForceNormalizeRepo preserves the legacy endpoint but now uses the incremental refresh flow.
 func ForceNormalizeRepo(c *gin.Context) {
 	startedAt := time.Now()
 	log.Printf("ForceNormalizeRepo: start method=%s path=%s remote=%s", c.Request.Method, c.Request.URL.Path, c.ClientIP())
@@ -345,74 +450,40 @@ func ForceNormalizeRepo(c *gin.Context) {
 
 	log.Printf("ForceNormalizeRepo: repo loaded id=%d name=%q internal=%t root=%q db_file=%q", repo.ID, repo.Name, repo.IsInternal, repo.RootPath, repo.DBFile)
 
-	if shouldBlockFullRepoScan(repo, "") {
-		c.JSON(http.StatusForbidden, gin.H{"error": "full repo scan is disabled for basic repositories"})
-		return
-	}
-
-	repoDB, rootAbs, dbPath, err := openRepoScopedDB(repo)
+	result, err := runRepoIncrementalNormalize(repo, "")
 	if err != nil {
-		log.Printf("ForceNormalizeRepo: open scoped db failed id=%s error=%v", id, err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "prepare repo db failed: " + err.Error()})
+		status := http.StatusInternalServerError
+		if strings.HasPrefix(err.Error(), "prepare repo db failed: ") {
+			status = http.StatusBadRequest
+		} else if strings.HasPrefix(err.Error(), "full repo scan is disabled for basic repositories") {
+			status = http.StatusForbidden
+		}
+		log.Printf("ForceNormalizeRepo: failed repo=%d error=%v", repo.ID, err)
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("ForceNormalizeRepo: scoped db ready id=%d root_abs=%q db_path=%q", repo.ID, rootAbs, dbPath)
 
-	collectStartedAt := time.Now()
-	log.Printf("ForceNormalizeRepo: collect stage start id=%d root=%q", repo.ID, rootAbs)
-	scanSpec := normalization.GetRuleBookScanSpecForRepo(repo.ID, repoDB)
-	repoInfo, err := EnsureRepoInfoFromRepository(repoDB, repo)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "load repo info failed: " + err.Error()})
-		return
-	}
-	_, _, _, effectiveSettings, _, err := resolveEffectiveRepoTypeSettings(repoInfo, repo)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "resolve repo type settings failed: " + err.Error()})
-		return
-	}
-	archivePaths, err := resolveRepoArchivePaths(rootAbs, effectiveSettings)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "resolve archive paths failed: " + err.Error()})
-		return
-	}
-	effectiveScope := ""
-	if archivePaths.MaterializedSubdir != defaultMaterializedSubdir {
-		effectiveScope = archivePaths.MaterializedSubdir
-	}
-	log.Printf("ForceNormalizeRepo: scan spec repo=%d scope=%q extensions=%v include_no_ext=%t dir_rules=%d", repo.ID, effectiveScope, scanSpec.Extensions, scanSpec.IncludeFilesWithoutExt, len(scanSpec.DirectoryRules))
-
-	records, err := collectRepoISORecordsByScanSpec(rootAbs, scanSpec, effectiveScope, archivePaths.ExcludeRootAbsPaths...)
-	if err != nil {
-		log.Printf("ForceNormalizeRepo: scan failed id=%s root=%s error=%v", id, rootAbs, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "scan repo path failed: " + err.Error()})
-		return
-	}
-	log.Printf("ForceNormalizeRepo: collect stage done id=%d records=%d elapsed=%s", repo.ID, len(records), time.Since(collectStartedAt).Truncate(time.Millisecond))
-
-	rebuildStartedAt := time.Now()
-	log.Printf("ForceNormalizeRepo: rebuild stage start id=%d db=%q records=%d", repo.ID, dbPath, len(records))
-	if err := rebuildRepoISOIndex(repoDB, records); err != nil {
-		log.Printf("ForceNormalizeRepo: rebuild index failed id=%s db=%s error=%v", id, dbPath, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "rebuild repoisos failed: " + err.Error()})
-		return
-	}
-	log.Printf("ForceNormalizeRepo: rebuild stage done id=%d elapsed=%s", repo.ID, time.Since(rebuildStartedAt).Truncate(time.Millisecond))
-
-	normalizeSteps := normalization.DefaultStepNames()
-	normalization.StartAsyncPostIndexNormalization(repo.ID, repoDB, rootAbs, records)
-
-	log.Printf("ForceNormalizeRepo: done id=%d name=%q root=%q db=%q indexed=%d elapsed=%s", repo.ID, repo.Name, rootAbs, dbPath, len(records), time.Since(startedAt).Truncate(time.Millisecond))
+	log.Printf("ForceNormalizeRepo: done repo=%d root=%q db=%q scanned=%d inserted=%d existing=%d missing_marked=%d missing_recovered=%d missing_total=%d missing_meta=%d metadata_refresh=%d elapsed=%s", repo.ID, result.RootAbs, result.DBPath, result.ScannedISOCount, result.InsertedNewISOCount, result.ExistingISOCount, result.ExistingMissingMarkedCount, result.ExistingMissingRecoveredCount, result.ExistingMissingTotalCount, result.ExistingMissingMetaCount, result.ExistingMetadataRefreshCount, time.Since(startedAt).Truncate(time.Millisecond))
 	c.JSON(http.StatusOK, gin.H{
-		"message":           "normalize completed",
-		"repo_id":           repo.ID,
-		"root_path":         rootAbs,
-		"db_path":           dbPath,
-		"iso_count":         len(records),
-		"normalize_async":   true,
-		"normalize_pending": len(records),
-		"normalize_steps":   normalizeSteps,
-		"table_name":        "repoisos",
+		"message":                          "normalize completed",
+		"repo_id":                          repo.ID,
+		"root_path":                        result.RootAbs,
+		"db_path":                          result.DBPath,
+		"iso_count":                        result.ScannedISOCount,
+		"scanned_iso_count":                result.ScannedISOCount,
+		"existing_iso_count":               result.ExistingISOCount,
+		"existing_missing_marked_count":    result.ExistingMissingMarkedCount,
+		"existing_missing_recovered_count": result.ExistingMissingRecoveredCount,
+		"existing_missing_total_count":     result.ExistingMissingTotalCount,
+		"inserted_new_iso_count":           result.InsertedNewISOCount,
+		"existing_missing_meta_count":      result.ExistingMissingMetaCount,
+		"existing_metadata_refresh_count":  result.ExistingMetadataRefreshCount,
+		"normalize_async":                  true,
+		"normalize_pending":                result.InsertedNewISOCount + result.ExistingMissingMetaCount,
+		"normalize_steps":                  result.NewRecordsAsyncSteps,
+		"existing_async_steps":             result.ExistingAsyncSteps,
+		"incremental":                      true,
+		"table_name":                       "repoisos",
 	})
 }
 

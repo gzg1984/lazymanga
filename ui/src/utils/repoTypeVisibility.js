@@ -1,8 +1,4 @@
-export const MANUAL_MANGA_REPO_TYPE_KEY = 'manga-manual'
-
-const HIDDEN_REPO_TYPE_KEYS = new Set(['manga', 'none'])
-
-export const DEFAULT_VISIBLE_REPO_TYPE_KEY = MANUAL_MANGA_REPO_TYPE_KEY
+const HIDDEN_REPO_TYPE_KEYS = new Set(['manga'])
 
 export function isRepoTypeHidden(key) {
   return HIDDEN_REPO_TYPE_KEYS.has(String(key || '').trim().toLowerCase())

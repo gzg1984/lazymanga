@@ -7,6 +7,7 @@ import (
 )
 
 var defaultScanExtensions = []string{".iso"}
+var namePolicyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // RuleBook defines a set of ordered rules used by the relocation engine.
 type RuleBook struct {
@@ -37,6 +38,7 @@ type DirectoryTransformSpec struct {
 	Pattern            string            `json:"pattern,omitempty"`
 	RecognizerName     string            `json:"recognizer_name,omitempty"`
 	RecognizerVersion  string            `json:"recognizer_version,omitempty"`
+	NamePolicy         string            `json:"name_policy,omitempty"`
 	RenameTemplate     string            `json:"rename_template,omitempty"`
 	TargetPathTemplate string            `json:"target_path_template,omitempty"`
 	MetadataFile       string            `json:"metadata_file,omitempty"`
@@ -236,6 +238,11 @@ func (b RuleBook) Validate() error {
 		if dirRule.Transform != nil {
 			if strings.TrimSpace(dirRule.Transform.Pattern) == "" && strings.TrimSpace(dirRule.Transform.RecognizerName) == "" {
 				return ErrInvalidRuleBook("scan.directory_rules.transform requires pattern or recognizer_name")
+			}
+			if namePolicy := strings.TrimSpace(dirRule.Transform.NamePolicy); namePolicy != "" {
+				if !namePolicyPattern.MatchString(strings.ToLower(namePolicy)) {
+					return ErrInvalidRuleBook("scan.directory_rules.transform.name_policy invalid")
+				}
 			}
 			if strings.TrimSpace(dirRule.Transform.Pattern) != "" {
 				if _, err := regexp.Compile(dirRule.Transform.Pattern); err != nil {

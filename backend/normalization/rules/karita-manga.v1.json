@@ -12,6 +12,7 @@
           "pattern": "^\\[(?P<circle>[^\\]]+)\\]\\s*(?P<title>.+?)(?:\\s+\\((?P<year>\\d{4})\\))?(?:\\s+\\[(?P<karita_id>\\d+)\\])?$",
           "recognizer_name": "karita-manga-filename",
           "recognizer_version": "v1",
+          "name_policy": "kavita-manga",
           "rename_template": "${title}",
           "target_path_template": "${title}",
           "metadata_file": ".karita.meta.json",

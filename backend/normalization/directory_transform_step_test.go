@@ -337,6 +337,50 @@ func TestRenderDirectoryTransformFromMetadataUsesEditedTitleAndPathTemplate(t *t
 	}
 }
 
+func TestApplyDirectoryNamePolicyKavitaManga(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "leading_star", in: "*My~Book", want: "star My-Book"},
+		{name: "leading_fullwidth_star", in: "＊My~Book", want: "star My-Book"},
+		{name: "leading_parenthesis", in: "(My~Book", want: "括号My-Book"},
+		{name: "leading_fullwidth_parenthesis", in: "（My~Book", want: "括号My-Book"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := applyDirectoryNamePolicy("kavita-manga", tc.in)
+			if got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestRenderDirectoryTransformFromMetadataAppliesKavitaNamePolicy(t *testing.T) {
+	transform := &rulebook.DirectoryTransformSpec{
+		NamePolicy:         "kavita-manga",
+		RenameTemplate:     `${title}`,
+		TargetPathTemplate: `作品/${title}`,
+		MetadataFile:       ".karita.meta.json",
+	}
+
+	targetName, captures, err := renderDirectoryTransformFromMetadata(transform, "*Bad~Name", "原路径/*Bad~Name", map[string]string{
+		"title": "*Bad~Name",
+	})
+	if err != nil {
+		t.Fatalf("renderDirectoryTransformFromMetadata failed: %v", err)
+	}
+	if targetName != "star Bad-Name" {
+		t.Fatalf("expected kavita policy normalized title, got %q", targetName)
+	}
+	if captures["target_path"] != "作品/star Bad-Name" {
+		t.Fatalf("expected kavita policy to apply to target path, got %#v", captures)
+	}
+}
+
 func TestApplyDirectoryTransformWithAnalysisPreservesExistingMetadataOnNormalizedPath(t *testing.T) {
 	transform := &rulebook.DirectoryTransformSpec{
 		RecognizerName:     "karita-manga-filename",

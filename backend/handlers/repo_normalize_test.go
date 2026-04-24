@@ -213,6 +213,36 @@ func TestBuildRepoInfoFromRepositoryDefaultsBasicRepoTypeToManualManga(t *testin
 	}
 }
 
+func TestRepoIncrementalExistingAsyncStepNamesExcludeDirectoryTransform(t *testing.T) {
+	steps := repoIncrementalExistingAsyncStepNames()
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 incremental existing async steps, got %#v", steps)
+	}
+	for _, step := range steps {
+		if step == "directory-transform" {
+			t.Fatalf("did not expect directory-transform in existing async steps: %#v", steps)
+		}
+	}
+	if steps[0] != "repoiso-refresh-metadata" {
+		t.Fatalf("expected metadata refresh step first, got %#v", steps)
+	}
+}
+
+func TestShouldAttemptRepoISOIncrementalMetadataRefreshOnlyWhenMetadataEmpty(t *testing.T) {
+	if !shouldAttemptRepoISOIncrementalMetadataRefresh(models.RepoISO{}) {
+		t.Fatal("expected empty metadata row to be eligible for incremental metadata refresh")
+	}
+	if !shouldAttemptRepoISOIncrementalMetadataRefresh(models.RepoISO{MetadataJSON: "{}"}) {
+		t.Fatal("expected empty object metadata to be eligible for incremental metadata refresh")
+	}
+	if shouldAttemptRepoISOIncrementalMetadataRefresh(models.RepoISO{MetadataJSON: `{"title":"Manual"}`}) {
+		t.Fatal("did not expect non-empty metadata row to be eligible for incremental metadata refresh")
+	}
+	if shouldAttemptRepoISOIncrementalMetadataRefresh(models.RepoISO{IsMissing: true}) {
+		t.Fatal("did not expect missing row to be eligible for incremental metadata refresh")
+	}
+}
+
 func formatPageNumber(v int) string {
 	return fmt.Sprintf("%02d", v)
 }
