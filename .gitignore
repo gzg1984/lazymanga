@@ -28,3 +28,6 @@ coverage
 /backend/todo.db
 
 backend/lazymanga
+
+
+.lzc-cli-build*
